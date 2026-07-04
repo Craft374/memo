@@ -3,5 +3,3 @@
 build/
 DerivedData/
 *.xcuserstate
-Resources/AppIcon.ico
-*.pdb

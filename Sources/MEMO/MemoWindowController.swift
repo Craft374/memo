@@ -52,6 +52,14 @@ final class MemoWindowController: NSWindowController, NSWindowDelegate {
         editorView.resetFontSize()
     }
 
+    var isLineWrapEnabled: Bool {
+        editorView.isLineWrapEnabled
+    }
+
+    func toggleLineWrap() {
+        editorView.toggleLineWrap()
+    }
+
     func setAlignment(_ alignment: NSTextAlignment) {
         editorView.setAlignment(alignment)
     }

@@ -2,6 +2,7 @@ import AppKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var windowController: MemoWindowController?
+    private var lineWrapMenuItem: NSMenuItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildMenu()
@@ -9,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let controller = MemoWindowController()
         windowController = controller
         controller.showWindow(nil)
+        updateLineWrapMenuItem()
 
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -67,6 +69,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let viewMenu = NSMenu(title: "보기")
         viewMenuItem.submenu = viewMenu
+        let lineWrapItem = viewMenu.addItem(withTitle: "자동 줄바꿈", action: #selector(toggleLineWrap(_:)), keyEquivalent: "w")
+        lineWrapItem.target = self
+        lineWrapItem.keyEquivalentModifierMask = [.command, .option]
+        lineWrapMenuItem = lineWrapItem
+        viewMenu.addItem(.separator())
         viewMenu.addItem(withTitle: "글자 크게", action: #selector(zoomIn(_:)), keyEquivalent: "+").target = self
         viewMenu.addItem(withTitle: "글자 작게", action: #selector(zoomOut(_:)), keyEquivalent: "-").target = self
         viewMenu.addItem(withTitle: "글자 크기 초기화", action: #selector(resetZoom(_:)), keyEquivalent: "0").target = self
@@ -118,6 +125,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         windowController?.resetFontSize()
     }
 
+    @objc private func toggleLineWrap(_ sender: Any?) {
+        windowController?.toggleLineWrap()
+        updateLineWrapMenuItem()
+    }
+
     @objc private func newTab(_ sender: Any?) {
         windowController?.createNewTab()
     }
@@ -144,5 +156,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func alignRight(_ sender: Any?) {
         windowController?.setAlignment(.right)
+    }
+
+    private func updateLineWrapMenuItem() {
+        lineWrapMenuItem?.state = windowController?.isLineWrapEnabled == false ? .off : .on
     }
 }

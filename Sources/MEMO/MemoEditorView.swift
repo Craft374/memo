@@ -14,6 +14,7 @@ final class MemoEditorView: NSView, NSTextViewDelegate, MemoTextViewZoomDelegate
     private let textColor = NSColor(calibratedWhite: 0.92, alpha: 1)
     private let backgroundColor = NSColor(calibratedRed: 0.075, green: 0.078, blue: 0.085, alpha: 1)
     private let userDefaultsFontSizeKey = "memo.fontSize"
+    private let userDefaultsLineWrapKey = "memo.lineWrapEnabled"
 
     private var tabs: [MemoTab] = []
     private var selectedTabID: String?
@@ -21,11 +22,13 @@ final class MemoEditorView: NSView, NSTextViewDelegate, MemoTextViewZoomDelegate
     private var tabBarHeightConstraint: NSLayoutConstraint?
     private var autosaveWorkItem: DispatchWorkItem?
     private var fontSize: CGFloat
+    private var lineWrapEnabled: Bool
     private var isLoadingTab = false
 
     override init(frame frameRect: NSRect) {
         let savedFontSize = UserDefaults.standard.double(forKey: userDefaultsFontSizeKey)
         fontSize = savedFontSize > 0 ? CGFloat(savedFontSize) : defaultFontSize
+        lineWrapEnabled = UserDefaults.standard.object(forKey: userDefaultsLineWrapKey) as? Bool ?? true
         textView = MemoTextView(frame: .zero)
 
         super.init(frame: frameRect)
@@ -106,8 +109,6 @@ final class MemoEditorView: NSView, NSTextViewDelegate, MemoTextViewZoomDelegate
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
         textView.textContainerInset = NSSize(width: 14, height: 16)
-        textView.textContainer?.containerSize = NSSize(width: contentSize.width, height: CGFloat.greatestFiniteMagnitude)
-        textView.textContainer?.widthTracksTextView = true
         textView.backgroundColor = backgroundColor
         textView.drawsBackground = true
         textView.textColor = textColor
@@ -124,6 +125,7 @@ final class MemoEditorView: NSView, NSTextViewDelegate, MemoTextViewZoomDelegate
         textView.zoomDelegate = self
         textView.font = editorFont(size: fontSize)
         textView.typingAttributes = defaultTypingAttributes(alignment: .left)
+        applyLineWrapSetting()
 
         scrollView.documentView = textView
 
@@ -215,6 +217,20 @@ final class MemoEditorView: NSView, NSTextViewDelegate, MemoTextViewZoomDelegate
 
     func resetFontSize() {
         setFontSize(defaultFontSize)
+    }
+
+    var isLineWrapEnabled: Bool {
+        lineWrapEnabled
+    }
+
+    func toggleLineWrap() {
+        lineWrapEnabled.toggle()
+        UserDefaults.standard.set(lineWrapEnabled, forKey: userDefaultsLineWrapKey)
+        applyLineWrapSetting()
+        applyParagraphStylesToCurrentText()
+        lineNumberRuler?.rebuildLineStarts()
+        lineNumberRuler?.needsDisplay = true
+        scheduleAutosave()
     }
 
     func setAlignment(_ alignment: NSTextAlignment) {
@@ -423,6 +439,56 @@ final class MemoEditorView: NSView, NSTextViewDelegate, MemoTextViewZoomDelegate
         scheduleAutosave()
     }
 
+    private func applyLineWrapSetting() {
+        let contentSize = scrollView.contentSize
+
+        scrollView.hasHorizontalScroller = !lineWrapEnabled
+        textView.isHorizontallyResizable = !lineWrapEnabled
+        textView.autoresizingMask = lineWrapEnabled ? [.width] : [.height]
+        textView.minSize = NSSize(width: 0, height: contentSize.height)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+
+        if lineWrapEnabled {
+            textView.frame.size.width = contentSize.width
+            textView.textContainer?.containerSize = NSSize(width: contentSize.width, height: CGFloat.greatestFiniteMagnitude)
+            textView.textContainer?.widthTracksTextView = true
+        } else {
+            textView.textContainer?.containerSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+            textView.textContainer?.widthTracksTextView = false
+        }
+
+        textView.layoutManager?.invalidateLayout(
+            forCharacterRange: NSRange(location: 0, length: (textView.string as NSString).length),
+            actualCharacterRange: nil
+        )
+        textView.needsDisplay = true
+    }
+
+    private func applyParagraphStylesToCurrentText() {
+        guard let textStorage = textView.textStorage else {
+            return
+        }
+
+        let fullRange = NSRange(location: 0, length: textStorage.length)
+        guard fullRange.length > 0 else {
+            textView.typingAttributes = defaultTypingAttributes(alignment: .left)
+            return
+        }
+
+        let fullString = textStorage.string as NSString
+        textStorage.beginEditing()
+        fullString.enumerateSubstrings(in: fullRange, options: [.byParagraphs, .substringNotRequired]) { _, paragraphRange, _, _ in
+            let alignment = self.paragraphAlignment(in: textStorage, at: min(paragraphRange.location, max(0, textStorage.length - 1)))
+            textStorage.addAttribute(.paragraphStyle, value: self.paragraphStyle(alignment: alignment), range: paragraphRange)
+        }
+        textStorage.endEditing()
+
+        var attributes = textView.typingAttributes
+        let currentStyle = attributes[.paragraphStyle] as? NSParagraphStyle
+        attributes[.paragraphStyle] = paragraphStyle(alignment: currentStyle?.alignment ?? .left)
+        textView.typingAttributes = attributes
+    }
+
     private func scheduleAutosave() {
         autosaveWorkItem?.cancel()
 
@@ -512,15 +578,18 @@ final class MemoEditorView: NSView, NSTextViewDelegate, MemoTextViewZoomDelegate
     }
 
     private func defaultTypingAttributes(alignment: NSTextAlignment) -> [NSAttributedString.Key: Any] {
-        let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.alignment = alignment
-        paragraphStyle.lineBreakMode = .byWordWrapping
-
         return [
             .font: editorFont(size: fontSize),
             .foregroundColor: textColor,
-            .paragraphStyle: paragraphStyle
+            .paragraphStyle: paragraphStyle(alignment: alignment)
         ]
+    }
+
+    private func paragraphStyle(alignment: NSTextAlignment) -> NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.alignment = alignment
+        style.lineBreakMode = lineWrapEnabled ? .byWordWrapping : .byClipping
+        return style
     }
 
     @objc private func scrollBoundsDidChange(_ notification: Notification) {
