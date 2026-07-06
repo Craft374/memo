@@ -5,14 +5,16 @@
 CotEditor보다 더 가볍게, 메모만 빠르게 적으려고 제작했습니다.
 현재 0.1.3v
 
-## 실행 방법
+윈도우 버전(C# WinForms)은 [`windows` 브랜치](https://github.com/Craft374/memo/tree/windows)에 있습니다.
+
+## 빌드 & 실행
 
 ```bash
 ./build.sh
 open build/MEMO.app
 ```
 
-## 완료
+## 기능
 
 - macOS 네이티브 AppKit 앱
 - 다크모드 고정
@@ -31,18 +33,13 @@ open build/MEMO.app
 
 ## 단축키
 
-- `Command + Option + W`: 자동 줄바꿈
 - `Command + D`: 새 탭
 - `Command + W`: 현재 탭 닫기
-- `Command + [`: 이전 탭
-- `Command + ]`: 다음 탭
+- `Command + [` / `Command + ]`: 이전/다음 탭
 - `Command + S`: 지금 저장
-- `Command + L`: 왼쪽 정렬
-- `Command + E`: 가운데 정렬
-- `Command + R`: 오른쪽 정렬
-- `Command + +`: 글자 크게
-- `Command + -`: 글자 작게
-- `Command + 0`: 글자 크기 초기화
+- `Command + L` / `Command + E` / `Command + R`: 왼쪽/가운데/오른쪽 정렬
+- `Command + +` / `Command + -` / `Command + 0`: 글자 크게/작게/초기화
+- `Command + Option + W`: 자동 줄바꿈 켜기/끄기
 
 ## 개발중
 
@@ -55,12 +52,11 @@ open build/MEMO.app
 
 ## 사용 기술
 
-- Swift
-- AppKit
+- Swift / AppKit
+- 외부 패키지·네트워크 접근 없음
 
 ## 참고
 
 - 메모는 `~/Library/Application Support/MEMO` 안에 자동 저장됩니다.
 - 탭 목록은 `tabs.json`, 탭 내용은 `tabs` 폴더 안에 저장됩니다.
 - 각 탭은 정렬 저장용 `.rtf`와 일반 텍스트 백업용 `.txt`를 같이 만듭니다.
-- 네트워크 접근이나 외부 패키지는 사용하지 않습니다.
