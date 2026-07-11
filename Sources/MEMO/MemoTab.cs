@@ -10,10 +10,14 @@ public sealed class MemoTab
     [JsonPropertyName("title")]
     public string Title { get; set; } = "";
 
+    [JsonPropertyName("bodyIsSeparate")]
+    public bool BodyIsSeparate { get; set; }
+
     public static MemoTab Create(int index) => new()
     {
         Id = Guid.NewGuid().ToString("D").ToUpperInvariant(),
         Title = $"메모 {index}",
+        BodyIsSeparate = true,
     };
 }
 
@@ -46,6 +50,9 @@ public sealed class WindowPlacement
 
 public sealed class MemoSettings
 {
+    [JsonPropertyName("fontFamily")]
+    public string? FontFamily { get; set; }
+
     [JsonPropertyName("fontSize")]
     public float FontSize { get; set; } = Theme.BaseFontSize;
 

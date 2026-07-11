@@ -4,9 +4,13 @@ public sealed class MemoRichTextBox : RichTextBox
 {
     public event Action<int>? ZoomStepRequested;
     public event Action? ViewChanged;
+    public event Action? ImeCompositionEnded;
 
     private int wheelRemainder;
     private bool wrapToWindow = true;
+    private bool viewChangePending;
+
+    public bool IsImeComposing { get; private set; }
 
     public MemoRichTextBox()
     {
@@ -42,26 +46,51 @@ public sealed class MemoRichTextBox : RichTextBox
         base.OnHandleCreated(e);
         NativeMethods.SetWindowTheme(Handle, "DarkMode_Explorer", null);
         ApplyDefaultCharFormat();
+        ApplyDefaultParagraphFormat();
         ApplyWrap();
         ApplyInsets();
     }
 
     // 글자 크기를 트윕(twip) 단위로 직접 지정해 DPI 이중 스케일링을 피한다.
-    // 문서 전체와 기본 서식을 항상 BaseFontSize로 고정 (표시 크기는 EM_SETZOOM 배율로만 변경)
+    // 문서 전체와 기본 서식을 기본 글꼴 크기로 고정하고, 표시 크기는 EM_SETZOOM 배율로만 변경한다.
     public void ApplyDefaultCharFormat()
     {
         var format = new NativeMethods.CHARFORMAT2W
         {
             dwMask = NativeMethods.CFM_FACE | NativeMethods.CFM_SIZE | NativeMethods.CFM_COLOR,
-            yHeight = (int)(Theme.BaseFontSize * 20),
+            yHeight = (int)Math.Round(Font.SizeInPoints * 20f),
             crTextColor = (Theme.EditorText.B << 16) | (Theme.EditorText.G << 8) | Theme.EditorText.R,
-            szFaceName = Theme.EditorFontFamily,
+            szFaceName = Font.FontFamily.Name,
         };
         format.cbSize = System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.CHARFORMAT2W>();
 
         NativeMethods.SendMessage(Handle, NativeMethods.EM_SETCHARFORMAT, (IntPtr)NativeMethods.SCF_DEFAULT, ref format);
         NativeMethods.SendMessage(Handle, NativeMethods.EM_SETCHARFORMAT, (IntPtr)NativeMethods.SCF_ALL, ref format);
     }
+
+    public void ApplyDefaultParagraphFormat()
+    {
+        int selectionStart = SelectionStart;
+        int selectionLength = SelectionLength;
+
+        SelectAll();
+        var format = new NativeMethods.PARAFORMAT2
+        {
+            cbSize = System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.PARAFORMAT2>(),
+            dwMask = NativeMethods.PFM_LINESPACING,
+            rgxTabs = new int[32],
+            dyLineSpacing = GetLineSpacingTwips(Font),
+            bLineSpacingRule = 4,
+        };
+        NativeMethods.SendMessage(Handle, NativeMethods.EM_SETPARAFORMAT, IntPtr.Zero, ref format);
+        Select(selectionStart, selectionLength);
+    }
+
+    internal static int GetLineSpacingTwips(Font font) =>
+        Math.Max(1, (int)Math.Ceiling(font.GetHeight(96f) * 15f));
+
+    internal static float GetLineHeightPixels(Font font, float dpi, float zoomRatio) =>
+        GetLineSpacingTwips(font) * dpi * zoomRatio / 1440f;
 
     protected override void OnClientSizeChanged(EventArgs e)
     {
@@ -71,7 +100,7 @@ public sealed class MemoRichTextBox : RichTextBox
             ApplyInsets();
         }
 
-        ViewChanged?.Invoke();
+        QueueViewChanged();
     }
 
     public void ApplyWrap()
@@ -118,7 +147,7 @@ public sealed class MemoRichTextBox : RichTextBox
     {
         int numerator = Math.Max(16, (int)Math.Round(ratio * 1000f));
         NativeMethods.SendMessage(Handle, NativeMethods.EM_SETZOOM, (IntPtr)numerator, (IntPtr)1000);
-        ViewChanged?.Invoke();
+        QueueViewChanged();
     }
 
     public string GetDiagnostics()
@@ -168,6 +197,18 @@ public sealed class MemoRichTextBox : RichTextBox
         SelectedText = TextSanitizer.Sanitize(text);
     }
 
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        if (keyData == Keys.Down && SelectionLength == 0 && !IsImeComposing && IsCaretOnLastPhysicalLine())
+        {
+            Select(TextLength, 0);
+            ScrollToCaret();
+            return true;
+        }
+
+        return base.ProcessCmdKey(ref msg, keyData);
+    }
+
     protected override void WndProc(ref Message m)
     {
         switch (m.Msg)
@@ -175,6 +216,10 @@ public sealed class MemoRichTextBox : RichTextBox
             case NativeMethods.WM_PASTE:
                 PastePlainText();
                 return;
+
+            case NativeMethods.WM_IME_STARTCOMPOSITION:
+                IsImeComposing = true;
+                break;
 
             case NativeMethods.WM_MOUSEWHEEL when (ModifierKeys & Keys.Control) == Keys.Control:
                 short delta = unchecked((short)(((long)m.WParam >> 16) & 0xFFFF));
@@ -191,24 +236,78 @@ public sealed class MemoRichTextBox : RichTextBox
             case NativeMethods.WM_HSCROLL:
             case NativeMethods.WM_MOUSEWHEEL:
             case NativeMethods.WM_SIZE:
-                ViewChanged?.Invoke();
+                QueueViewChanged();
                 break;
 
-            case NativeMethods.WM_SETFONT:
-                // WM_SETFONT가 기본 서식을 덮어쓰므로 다시 고정
-                ApplyDefaultCharFormat();
+            case NativeMethods.WM_IME_ENDCOMPOSITION:
+                CompleteImeComposition();
                 break;
         }
+    }
+
+    protected override void OnLostFocus(EventArgs e)
+    {
+        base.OnLostFocus(e);
+        CompleteImeComposition();
+    }
+
+    protected override void OnVScroll(EventArgs e)
+    {
+        base.OnVScroll(e);
+        QueueViewChanged();
     }
 
     private void HandleZoomWheel(int delta)
     {
         wheelRemainder += delta;
-        while (Math.Abs(wheelRemainder) >= 120)
+        int steps = wheelRemainder / 120;
+        if (steps == 0)
         {
-            int step = wheelRemainder > 0 ? 1 : -1;
-            ZoomStepRequested?.Invoke(step);
-            wheelRemainder -= step * 120;
+            return;
+        }
+
+        wheelRemainder -= steps * 120;
+        ZoomStepRequested?.Invoke(steps);
+    }
+
+    private void QueueViewChanged()
+    {
+        if (viewChangePending || !IsHandleCreated || IsDisposed || Disposing)
+        {
+            return;
+        }
+
+        viewChangePending = true;
+        try
+        {
+            BeginInvoke((Action)RaisePendingViewChanged);
+        }
+        catch (InvalidOperationException)
+        {
+            viewChangePending = false;
         }
     }
+
+    private void RaisePendingViewChanged()
+    {
+        viewChangePending = false;
+        if (!IsDisposed && !Disposing)
+        {
+            ViewChanged?.Invoke();
+        }
+    }
+
+    private void CompleteImeComposition()
+    {
+        if (!IsImeComposing)
+        {
+            return;
+        }
+
+        IsImeComposing = false;
+        ImeCompositionEnded?.Invoke();
+    }
+
+    private bool IsCaretOnLastPhysicalLine() =>
+        GetLineFromCharIndex(SelectionStart) >= GetLineFromCharIndex(TextLength);
 }

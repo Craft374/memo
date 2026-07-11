@@ -6,6 +6,7 @@ namespace Memo;
 public sealed class MainForm : Form
 {
     private readonly MemoStorage storage = new();
+    private readonly TextBox titleEditor = new();
     private readonly MemoRichTextBox editor = new();
     private readonly LineNumberGutter gutter;
     private readonly TabBarControl tabBar = new();
@@ -13,13 +14,18 @@ public sealed class MainForm : Form
     private readonly System.Windows.Forms.Timer autosaveTimer = new() { Interval = 350 };
     private readonly System.Windows.Forms.Timer tabBarAnimTimer = new() { Interval = 10 };
     private readonly Stopwatch tabBarAnimClock = new();
-    private readonly Font editorBaseFont;
+    private Font editorBaseFont;
+
+    private const float KeyboardFontSizeStep = 0.25f;
+    private const float MouseWheelFontSizeStep = 1f;
 
     private readonly List<MemoTab> tabs = new();
     private string? selectedTabId;
     private MemoSettings settings;
     private float fontSize;
     private bool isLoadingTab;
+    private bool editorTextChangePending;
+    private bool autosaveAfterIme;
     private int tabBarAnimFrom;
     private int tabBarAnimTo;
 
@@ -34,7 +40,8 @@ public sealed class MainForm : Form
     {
         settings = storage.LoadSettings();
         fontSize = ClampFontSize(settings.FontSize > 0 ? settings.FontSize : Theme.BaseFontSize);
-        editorBaseFont = new Font(Theme.EditorFontFamily, Theme.BaseFontSize, FontStyle.Regular, GraphicsUnit.Point);
+        editorBaseFont = new Font(Theme.ResolveEditorFontFamily(settings.FontFamily), Theme.BaseFontSize,
+            FontStyle.Regular, GraphicsUnit.Point);
 
         Text = "MEMO";
         BackColor = Theme.WindowBackground;
@@ -42,6 +49,7 @@ public sealed class MainForm : Form
         DoubleBuffered = true;
         Icon = LoadAppIcon();
 
+        ConfigureTitleEditor();
         ConfigureEditor();
         gutter = new LineNumberGutter(editor, editorBaseFont);
         BuildMenu();
@@ -50,6 +58,12 @@ public sealed class MainForm : Form
         autosaveTimer.Tick += (_, _) =>
         {
             autosaveTimer.Stop();
+            if (editor.IsImeComposing)
+            {
+                autosaveAfterIme = true;
+                return;
+            }
+
             SaveNow(showError: false);
         };
         tabBarAnimTimer.Tick += (_, _) => OnTabBarAnimTick();
@@ -148,11 +162,11 @@ public sealed class MainForm : Form
                 return true;
 
             case Keys.Control | Keys.Add:
-                ChangeFontSize(0.75f);
+                ChangeFontSize(KeyboardFontSizeStep);
                 return true;
 
             case Keys.Control | Keys.Subtract:
-                ChangeFontSize(-0.75f);
+                ChangeFontSize(-KeyboardFontSizeStep);
                 return true;
 
             case Keys.Control | Keys.NumPad0:
@@ -178,10 +192,9 @@ public sealed class MainForm : Form
         editor.WrapToWindow = settings.LineWrapEnabled;
 
         editor.TextChanged += (_, _) => OnEditorTextChanged();
-        editor.SelectionChanged += (_, _) => gutter?.Invalidate();
-        editor.VScroll += (_, _) => gutter?.Invalidate();
+        editor.ImeCompositionEnded += OnImeCompositionEnded;
         editor.ViewChanged += () => gutter?.Invalidate();
-        editor.ZoomStepRequested += steps => ChangeFontSize(steps * 0.25f);
+        editor.ZoomStepRequested += steps => ChangeFontSize(steps * MouseWheelFontSizeStep);
 
         var context = new ContextMenuStrip
         {
@@ -200,6 +213,17 @@ public sealed class MainForm : Form
         editor.ContextMenuStrip = context;
     }
 
+    private void ConfigureTitleEditor()
+    {
+        titleEditor.BorderStyle = BorderStyle.None;
+        titleEditor.AutoSize = false;
+        titleEditor.Dock = DockStyle.Fill;
+        titleEditor.BackColor = Theme.WindowBackground;
+        titleEditor.ForeColor = Theme.EditorText;
+        titleEditor.Font = new Font("Segoe UI", 18f, FontStyle.Bold, GraphicsUnit.Point);
+        titleEditor.TextChanged += (_, _) => OnTitleTextChanged();
+    }
+
     private void BuildLayout()
     {
         var content = new Panel
@@ -207,8 +231,27 @@ public sealed class MainForm : Form
             Dock = DockStyle.Fill,
             BackColor = Theme.WindowBackground,
         };
-        content.Controls.Add(editor);
-        content.Controls.Add(gutter);
+        float scale = DeviceDpi / 96f;
+        var titleArea = new Panel
+        {
+            Dock = DockStyle.Top,
+            Height = (int)Math.Round(74 * scale),
+            BackColor = Theme.WindowBackground,
+            Padding = new Padding((int)Math.Round(58 * scale), (int)Math.Round(16 * scale),
+                (int)Math.Round(24 * scale), (int)Math.Round(12 * scale)),
+        };
+        titleArea.Controls.Add(titleEditor);
+
+        var bodyArea = new Panel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = Theme.WindowBackground,
+        };
+        bodyArea.Controls.Add(editor);
+        bodyArea.Controls.Add(gutter);
+
+        content.Controls.Add(bodyArea);
+        content.Controls.Add(titleArea);
 
         tabBar.TabSelected += SelectTab;
         tabBar.TabCloseRequested += CloseTab;
@@ -272,15 +315,17 @@ public sealed class MainForm : Form
         wrapMenuItem.Checked = settings.LineWrapEnabled;
         viewMenu.DropDownItems.Add(wrapMenuItem);
         viewMenu.DropDownItems.Add(new ToolStripSeparator());
-        var zoomInItem = NewItem("글자 크게", Keys.Control | Keys.Oemplus, (_, _) => ChangeFontSize(0.75f));
+        var zoomInItem = NewItem("글자 크게", Keys.Control | Keys.Oemplus, (_, _) => ChangeFontSize(KeyboardFontSizeStep));
         zoomInItem.ShortcutKeyDisplayString = "Ctrl++";
-        var zoomOutItem = NewItem("글자 작게", Keys.Control | Keys.OemMinus, (_, _) => ChangeFontSize(-0.75f));
+        var zoomOutItem = NewItem("글자 작게", Keys.Control | Keys.OemMinus, (_, _) => ChangeFontSize(-KeyboardFontSizeStep));
         zoomOutItem.ShortcutKeyDisplayString = "Ctrl+-";
         var zoomResetItem = NewItem("글자 크기 초기화", Keys.Control | Keys.D0, (_, _) => ResetFontSize());
         zoomResetItem.ShortcutKeyDisplayString = "Ctrl+0";
         viewMenu.DropDownItems.Add(zoomInItem);
         viewMenu.DropDownItems.Add(zoomOutItem);
         viewMenu.DropDownItems.Add(zoomResetItem);
+        viewMenu.DropDownItems.Add(new ToolStripSeparator());
+        viewMenu.DropDownItems.Add(NewItem("글꼴 설정...", null, (_, _) => OpenFontSettings()));
 
         var tabMenu = new ToolStripMenuItem("탭(&T)");
         tabMenu.DropDownItems.Add(NewItem("새 탭", Keys.Control | Keys.T, (_, _) => CreateNewTab()));
@@ -357,6 +402,7 @@ public sealed class MainForm : Form
             return;
         }
 
+        bool migratedLegacyTitle = false;
         isLoadingTab = true;
         try
         {
@@ -379,8 +425,11 @@ public sealed class MainForm : Form
                 editor.Text = storage.LoadTabText(tab.Id) ?? "";
             }
 
+            titleEditor.Text = tab.Title;
+            migratedLegacyTitle = SeparateLegacyTitleFromBody(tab);
             editor.Select(0, 0);
             editor.ApplyDefaultCharFormat();
+            editor.ApplyDefaultParagraphFormat();
             editor.ApplyWrap();
             editor.ApplyInsets();
             ApplyZoom();
@@ -395,6 +444,11 @@ public sealed class MainForm : Form
         {
             isLoadingTab = false;
         }
+
+        if (migratedLegacyTitle)
+        {
+            SaveNow(showError: false);
+        }
     }
 
     private void OnEditorTextChanged()
@@ -404,10 +458,41 @@ public sealed class MainForm : Form
             return;
         }
 
+        if (editor.IsImeComposing)
+        {
+            editorTextChangePending = true;
+            return;
+        }
+
         string text = editor.Text;
         gutter.RebuildLineStarts(text);
-        UpdateCurrentTabTitle(text);
         ScheduleAutosave();
+    }
+
+    private void OnTitleTextChanged()
+    {
+        if (isLoadingTab)
+        {
+            return;
+        }
+
+        UpdateCurrentTabTitle();
+        ScheduleAutosave();
+    }
+
+    private void OnImeCompositionEnded()
+    {
+        if (editorTextChangePending)
+        {
+            editorTextChangePending = false;
+            OnEditorTextChanged();
+        }
+
+        if (autosaveAfterIme)
+        {
+            autosaveAfterIme = false;
+            ScheduleAutosave();
+        }
     }
 
     private void ScheduleAutosave()
@@ -455,6 +540,7 @@ public sealed class MainForm : Form
         var bounds = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
         return new MemoSettings
         {
+            FontFamily = editorBaseFont.FontFamily.Name,
             FontSize = fontSize,
             LineWrapEnabled = settings.LineWrapEnabled,
             Window = new WindowPlacement
@@ -492,6 +578,11 @@ public sealed class MainForm : Form
     {
         int index = tabs.FindIndex(t => t.Id == id);
         if (index < 0)
+        {
+            return;
+        }
+
+        if (!ConfirmTabClose(tabs[index]))
         {
             return;
         }
@@ -556,7 +647,14 @@ public sealed class MainForm : Form
         SelectTab(tabs[next].Id);
     }
 
-    private void UpdateCurrentTabTitle(string text)
+    private bool ConfirmTabClose(MemoTab tab)
+    {
+        string message = $"‘{tab.Title}’ 탭을 닫으시겠습니까?\n본문 내용은 삭제됩니다.";
+        return MessageBox.Show(this, message, "탭 닫기", MessageBoxButtons.OKCancel,
+            MessageBoxIcon.Warning, MessageBoxDefaultButton.Button1) == DialogResult.OK;
+    }
+
+    private void UpdateCurrentTabTitle()
     {
         if (selectedTabId == null)
         {
@@ -569,8 +667,14 @@ public sealed class MainForm : Form
             return;
         }
 
-        string fallback = tabs[index].Title;
-        string title = TitleFromText(text, fallback);
+        string title = titleEditor.Text.Trim();
+        if (title.Length == 0)
+        {
+            title = tabs[index].Title.StartsWith("메모 ", StringComparison.Ordinal)
+                ? tabs[index].Title
+                : $"메모 {NextTabNumber(tabs[index].Id)}";
+        }
+
         if (tabs[index].Title == title)
         {
             return;
@@ -581,23 +685,46 @@ public sealed class MainForm : Form
         SaveSessionSafe();
     }
 
-    private string TitleFromText(string text, string fallback)
+    private bool SeparateLegacyTitleFromBody(MemoTab tab)
     {
-        foreach (var line in text.Split('\n'))
+        if (tab.BodyIsSeparate)
         {
-            string title = line.Trim();
-            if (title.Length > 0)
-            {
-                return title.Length > 24 ? title[..24] : title;
-            }
+            return false;
         }
 
-        return fallback.StartsWith("메모 ", StringComparison.Ordinal) ? fallback : $"메모 {NextTabNumber()}";
+        tab.BodyIsSeparate = true;
+
+        string text = editor.Text;
+        int lineStart = 0;
+        while (lineStart < text.Length)
+        {
+            int newline = text.IndexOf('\n', lineStart);
+            int lineEnd = newline < 0 ? text.Length : newline;
+            if (text[lineStart..lineEnd].Trim().Length > 0)
+            {
+                int removeEnd = newline < 0 ? text.Length : newline + 1;
+                editor.Select(0, removeEnd);
+                editor.SelectedText = "";
+                return true;
+            }
+
+            if (newline < 0)
+            {
+                break;
+            }
+
+            lineStart = newline + 1;
+        }
+
+        return true;
     }
 
-    private int NextTabNumber()
+    private int NextTabNumber(string? excludedTabId = null)
     {
-        var titles = tabs.Select(t => t.Title).ToHashSet();
+        var titles = tabs
+            .Where(t => t.Id != excludedTabId)
+            .Select(t => t.Title)
+            .ToHashSet();
         int number = 1;
         while (titles.Contains($"메모 {number}"))
         {
@@ -668,6 +795,37 @@ public sealed class MainForm : Form
         Math.Clamp(value, Theme.MinFontSize, Theme.MaxFontSize);
 
     private void ApplyZoom() => editor.SetZoomRatio(ZoomRatio);
+
+    private void OpenFontSettings()
+    {
+        using var dialog = new FontSettingsDialog(editorBaseFont.FontFamily.Name);
+        if (dialog.ShowDialog(this) == DialogResult.OK)
+        {
+            SetEditorFontFamily(dialog.SelectedFontFamily);
+        }
+
+        editor.Focus();
+    }
+
+    private void SetEditorFontFamily(string fontFamily)
+    {
+        string resolved = Theme.ResolveEditorFontFamily(fontFamily);
+        if (resolved.Equals(editorBaseFont.FontFamily.Name, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        Font previous = editorBaseFont;
+        editorBaseFont = new Font(resolved, Theme.BaseFontSize, FontStyle.Regular, GraphicsUnit.Point);
+        editor.Font = editorBaseFont;
+        editor.ApplyDefaultCharFormat();
+        editor.ApplyDefaultParagraphFormat();
+        gutter.SetTypography(editorBaseFont, ZoomRatio, fontSize);
+        ApplyZoom();
+        settings.FontFamily = editorBaseFont.FontFamily.Name;
+        ScheduleAutosave();
+        previous.Dispose();
+    }
 
     private void SetAlignment(HorizontalAlignment alignment)
     {

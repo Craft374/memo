@@ -5,7 +5,8 @@ namespace Memo;
 internal static class NativeMethods
 {
     public const int WM_SIZE = 0x0005;
-    public const int WM_SETFONT = 0x0030;
+    public const int WM_IME_STARTCOMPOSITION = 0x010D;
+    public const int WM_IME_ENDCOMPOSITION = 0x010E;
     public const int WM_HSCROLL = 0x0114;
     public const int WM_VSCROLL = 0x0115;
     public const int WM_MOUSEWHEEL = 0x020A;
@@ -14,6 +15,7 @@ internal static class NativeMethods
     public const int EM_SETRECT = 0x00B3;
     public const int EM_GETCHARFORMAT = 0x0400 + 58;
     public const int EM_SETCHARFORMAT = 0x0400 + 68;
+    public const int EM_SETPARAFORMAT = 0x0400 + 71;
     public const int EM_GETZOOM = 0x0400 + 224;
     public const int EM_SETTARGETDEVICE = 0x0400 + 72;
     public const int EM_SETZOOM = 0x0400 + 225;
@@ -24,6 +26,7 @@ internal static class NativeMethods
     public const uint CFM_FACE = 0x20000000;
     public const uint CFM_COLOR = 0x40000000;
     public const uint CFM_SIZE = 0x80000000;
+    public const uint PFM_LINESPACING = 0x00000100;
 
     public const int GWL_STYLE = -16;
     public const int WS_HSCROLL = 0x00100000;
@@ -76,6 +79,36 @@ internal static class NativeMethods
         public byte bUnderlineColor;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    public struct PARAFORMAT2
+    {
+        public int cbSize;
+        public uint dwMask;
+        public ushort wNumbering;
+        public ushort wReserved;
+        public int dxStartIndent;
+        public int dxRightIndent;
+        public int dxOffset;
+        public ushort wAlignment;
+        public short cTabCount;
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)]
+        public int[] rgxTabs;
+        public int dySpaceBefore;
+        public int dySpaceAfter;
+        public int dyLineSpacing;
+        public short sStyle;
+        public byte bLineSpacingRule;
+        public byte bOutlineLevel;
+        public ushort wShadingWeight;
+        public ushort wShadingStyle;
+        public ushort wNumberingStart;
+        public ushort wNumberingStyle;
+        public ushort wNumberingTab;
+        public ushort wBorderSpace;
+        public ushort wBorderWidth;
+        public ushort wBorders;
+    }
+
     [DllImport("user32.dll")]
     public static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
 
@@ -84,6 +117,9 @@ internal static class NativeMethods
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     public static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, ref CHARFORMAT2W lParam);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, ref PARAFORMAT2 lParam);
 
     [DllImport("user32.dll")]
     public static extern IntPtr SendMessage(IntPtr hWnd, int msg, ref int wParam, ref int lParam);

@@ -30,25 +30,47 @@ internal static class Theme
     // 맥 Menlo 15px ≈ 윈도우 11.5pt (RTF의 half-point 단위와 정확히 맞는 값)
     public const float BaseFontSize = 11.5f;
     public const float MinFontSize = 7.5f;
-    public const float MaxFontSize = 25.5f;
+    public const float MaxFontSize = 300f;
 
-    public static readonly string EditorFontFamily = ResolveEditorFontFamily();
+    public static readonly string DefaultEditorFontFamily = ResolveEditorFontFamily(null);
 
-    private static string ResolveEditorFontFamily()
+    public static IReadOnlyList<string> GetInstalledFontFamilies()
     {
         try
         {
             using var installed = new InstalledFontCollection();
-            foreach (var family in installed.Families)
-            {
-                if (family.Name.Equals("Cascadia Mono", StringComparison.OrdinalIgnoreCase))
-                {
-                    return "Cascadia Mono";
-                }
-            }
+            return installed.Families
+                .Select(family => family.Name)
+                .OrderBy(name => name, StringComparer.CurrentCultureIgnoreCase)
+                .ToArray();
         }
         catch
         {
+            return Array.Empty<string>();
+        }
+    }
+
+    public static string ResolveEditorFontFamily(string? preferred)
+    {
+        var installed = GetInstalledFontFamilies();
+        if (!string.IsNullOrWhiteSpace(preferred))
+        {
+            string? match = installed.FirstOrDefault(name =>
+                name.Equals(preferred, StringComparison.OrdinalIgnoreCase));
+            if (match != null)
+            {
+                return match;
+            }
+        }
+
+        foreach (string fallback in new[] { "Cascadia Mono", "Consolas" })
+        {
+            string? match = installed.FirstOrDefault(name =>
+                name.Equals(fallback, StringComparison.OrdinalIgnoreCase));
+            if (match != null)
+            {
+                return match;
+            }
         }
 
         return "Consolas";

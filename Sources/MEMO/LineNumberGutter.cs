@@ -10,6 +10,7 @@ public sealed class LineNumberGutter : Control
     private float fontSizePt = Theme.BaseFontSize;
     private Font? numberFont;
     private float numberFontSize = -1f;
+    private string? numberFontFamily;
 
     public LineNumberGutter(MemoRichTextBox editor, Font editorBaseFont)
     {
@@ -34,7 +35,6 @@ public sealed class LineNumberGutter : Control
         this.editorBaseFont = editorBaseFont;
         this.zoomRatio = zoomRatio;
         this.fontSizePt = fontSizePt;
-        Invalidate();
     }
 
     public void RebuildLineStarts(string text)
@@ -70,7 +70,7 @@ public sealed class LineNumberGutter : Control
         }
 
         float scale = DeviceDpi / 96f;
-        float lineHeight = editorBaseFont.GetHeight(g) * zoomRatio;
+        float lineHeight = MemoRichTextBox.GetLineHeightPixels(editorBaseFont, g.DpiY, zoomRatio);
         int rightPad = (int)(12 * scale);
         var font = GetNumberFont();
         float fontHeight = font.GetHeight(g);
@@ -119,11 +119,14 @@ public sealed class LineNumberGutter : Control
     private Font GetNumberFont()
     {
         float size = Math.Max(7.5f, Math.Min(9.75f, fontSizePt - 1.5f));
-        if (numberFont == null || Math.Abs(numberFontSize - size) > 0.01f)
+        string family = editorBaseFont.FontFamily.Name;
+        if (numberFont == null || Math.Abs(numberFontSize - size) > 0.01f ||
+            !string.Equals(numberFontFamily, family, StringComparison.OrdinalIgnoreCase))
         {
             numberFont?.Dispose();
-            numberFont = new Font(Theme.EditorFontFamily, size, FontStyle.Regular, GraphicsUnit.Point);
+            numberFont = new Font(editorBaseFont.FontFamily, size, FontStyle.Regular, GraphicsUnit.Point);
             numberFontSize = size;
+            numberFontFamily = family;
         }
 
         return numberFont;

@@ -117,6 +117,7 @@ public sealed class MemoStorage
             {
                 Id = id,
                 Title = title.Length == 0 ? $"메모 {seen.Count}" : title,
+                BodyIsSeparate = tab.BodyIsSeparate,
             });
         }
 
