@@ -1,15 +1,16 @@
 import AppKit
 
-final class MemoEditorView: NSView, NSTextViewDelegate, MemoTextViewZoomDelegate, MemoTabBarViewDelegate {
+final class MemoEditorView: NSView, NSTextViewDelegate, NSTextFieldDelegate, MemoTextViewZoomDelegate, MemoTabBarViewDelegate {
     let textView: MemoTextView
 
     private let tabBarView = MemoTabBarView()
+    private let titleTextField = NSTextField()
     private let scrollView = NSScrollView()
     private let storage = MemoStorage()
     private let saveQueue = DispatchQueue(label: "com.craft374.memo.save", qos: .utility)
     private let baseFontName = "Menlo"
     private let minimumFontSize: CGFloat = 10
-    private let maximumFontSize: CGFloat = 34
+    private let maximumFontSize: CGFloat = 300
     private let defaultFontSize: CGFloat = 15
     private let textColor = NSColor(calibratedWhite: 0.92, alpha: 1)
     private let backgroundColor = NSColor(calibratedRed: 0.075, green: 0.078, blue: 0.085, alpha: 1)
@@ -24,6 +25,8 @@ final class MemoEditorView: NSView, NSTextViewDelegate, MemoTextViewZoomDelegate
     private var fontSize: CGFloat
     private var lineWrapEnabled: Bool
     private var isLoadingTab = false
+    private var isNormalizingTextAttributes = false
+    private var isNormalizingTypingAttributes = false
 
     override init(frame frameRect: NSRect) {
         let savedFontSize = UserDefaults.standard.double(forKey: userDefaultsFontSizeKey)
@@ -37,6 +40,7 @@ final class MemoEditorView: NSView, NSTextViewDelegate, MemoTextViewZoomDelegate
         layer?.backgroundColor = backgroundColor.cgColor
 
         configureTabBar()
+        configureTitleTextField()
         configureScrollView()
         configureTextView()
         loadSavedSession()
@@ -71,7 +75,7 @@ final class MemoEditorView: NSView, NSTextViewDelegate, MemoTextViewZoomDelegate
         NSLayoutConstraint.activate([
             scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            scrollView.topAnchor.constraint(equalTo: tabBarView.bottomAnchor),
+            scrollView.topAnchor.constraint(equalTo: titleTextField.bottomAnchor, constant: 4),
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor)
         ])
 
@@ -99,6 +103,30 @@ final class MemoEditorView: NSView, NSTextViewDelegate, MemoTextViewZoomDelegate
         ])
     }
 
+    private func configureTitleTextField() {
+        titleTextField.translatesAutoresizingMaskIntoConstraints = false
+        titleTextField.delegate = self
+        titleTextField.font = NSFont.systemFont(ofSize: 26, weight: .bold)
+        titleTextField.textColor = textColor
+        titleTextField.placeholderString = "제목 없음"
+        titleTextField.isBordered = false
+        titleTextField.isBezeled = false
+        titleTextField.drawsBackground = false
+        titleTextField.focusRingType = .none
+        titleTextField.maximumNumberOfLines = 1
+        titleTextField.lineBreakMode = .byTruncatingTail
+        titleTextField.cell?.usesSingleLineMode = true
+
+        addSubview(titleTextField)
+
+        NSLayoutConstraint.activate([
+            titleTextField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            titleTextField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
+            titleTextField.topAnchor.constraint(equalTo: tabBarView.bottomAnchor, constant: 14),
+            titleTextField.heightAnchor.constraint(equalToConstant: 38)
+        ])
+    }
+
     private func configureTextView() {
         let contentSize = scrollView.contentSize
 
@@ -108,7 +136,7 @@ final class MemoEditorView: NSView, NSTextViewDelegate, MemoTextViewZoomDelegate
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
-        textView.textContainerInset = NSSize(width: 14, height: 16)
+        textView.textContainerInset = NSSize(width: 14, height: 8)
         textView.backgroundColor = backgroundColor
         textView.drawsBackground = true
         textView.textColor = textColor
@@ -117,10 +145,15 @@ final class MemoEditorView: NSView, NSTextViewDelegate, MemoTextViewZoomDelegate
         textView.isRichText = true
         textView.importsGraphics = false
         textView.usesFindBar = false
+        textView.smartInsertDeleteEnabled = false
         textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticLinkDetectionEnabled = false
+        textView.isAutomaticDataDetectionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
         textView.isAutomaticSpellingCorrectionEnabled = false
+        textView.isAutomaticTextCompletionEnabled = false
+        textView.enabledTextCheckingTypes = 0
         textView.delegate = self
         textView.zoomDelegate = self
         textView.font = editorFont(size: fontSize)
@@ -151,19 +184,43 @@ final class MemoEditorView: NSView, NSTextViewDelegate, MemoTextViewZoomDelegate
         }
 
         isLoadingTab = true
+        let didLoadStoredText: Bool
+        var didMigrateLegacyTitle = false
 
         if let savedText = storage.load(tab: selectedTab) {
+            didLoadStoredText = true
             textView.textStorage?.setAttributedString(savedText)
             applyDefaultStyleToLoadedText()
+
+            if !selectedTab.hasSeparateTitle {
+                didMigrateLegacyTitle = migrateLegacyTitle(for: selectedTab)
+            }
         } else {
+            didLoadStoredText = false
             textView.string = ""
             textView.typingAttributes = defaultTypingAttributes(alignment: .left)
+
+            if !selectedTab.hasSeparateTitle {
+                markCurrentTabAsUsingSeparateTitle()
+                didMigrateLegacyTitle = true
+            }
         }
+
+        titleTextField.stringValue = currentTab?.title ?? ""
 
         refreshTabBar()
         lineNumberRuler?.rebuildLineStarts()
         lineNumberRuler?.needsDisplay = true
         isLoadingTab = false
+        normalizeCurrentTypingAttributes()
+
+        if didLoadStoredText || didMigrateLegacyTitle {
+            autosaveCurrentTab(waitUntilDone: false, showError: false)
+        }
+
+        if didMigrateLegacyTitle {
+            saveSession()
+        }
     }
 
     private func applyDefaultStyleToLoadedText() {
@@ -181,30 +238,67 @@ final class MemoEditorView: NSView, NSTextViewDelegate, MemoTextViewZoomDelegate
         textStorage.setAttributedString(NSAttributedString(string: cleanedString))
 
         textStorage.beginEditing()
-        let fullString = textStorage.string as NSString
-        let fullRange = NSRange(location: 0, length: textStorage.length)
+        applyDefaultAttributes(to: textStorage, preservingAlignmentFrom: source)
 
-        fullString.enumerateSubstrings(in: fullRange, options: [.byParagraphs, .substringNotRequired]) { _, paragraphRange, _, _ in
-            let alignment = self.paragraphAlignment(in: source, at: min(paragraphRange.location, max(0, source.length - 1)))
-            textStorage.setAttributes(self.defaultTypingAttributes(alignment: alignment), range: paragraphRange)
-        }
-
-        if fullRange.length == 0 {
+        if textStorage.length == 0 {
             textView.typingAttributes = defaultTypingAttributes(alignment: .left)
         }
 
         textStorage.endEditing()
+        normalizeCurrentTypingAttributes()
     }
 
     func textDidChange(_ notification: Notification) {
-        guard !isLoadingTab else {
+        guard !isLoadingTab, !isNormalizingTextAttributes else {
             return
         }
 
+        normalizeTextAttributesInCurrentDocument()
         lineNumberRuler?.rebuildLineStarts()
         lineNumberRuler?.needsDisplay = true
-        updateCurrentTabTitle()
         scheduleAutosave()
+    }
+
+    func controlTextDidChange(_ notification: Notification) {
+        guard !isLoadingTab, notification.object as? NSTextField === titleTextField else {
+            return
+        }
+
+        updateCurrentTabTitle()
+    }
+
+    func controlTextDidEndEditing(_ notification: Notification) {
+        guard notification.object as? NSTextField === titleTextField else {
+            return
+        }
+
+        updateCurrentTabTitle()
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        guard control === titleTextField, commandSelector == #selector(NSResponder.insertNewline(_:)) else {
+            return false
+        }
+
+        updateCurrentTabTitle()
+        window?.makeFirstResponder(self.textView)
+        return true
+    }
+
+    func textView(
+        _ textView: NSTextView,
+        shouldChangeTypingAttributes oldTypingAttributes: [String: Any],
+        toAttributes newTypingAttributes: [NSAttributedString.Key: Any]
+    ) -> [NSAttributedString.Key: Any] {
+        normalizedTypingAttributes(from: newTypingAttributes)
+    }
+
+    func textViewDidChangeTypingAttributes(_ notification: Notification) {
+        normalizeCurrentTypingAttributes()
+    }
+
+    func textViewDidChangeSelection(_ notification: Notification) {
+        normalizeCurrentTypingAttributes()
     }
 
     func memoTextView(_ textView: MemoTextView, zoomBy delta: CGFloat) {
@@ -260,7 +354,7 @@ final class MemoEditorView: NSView, NSTextViewDelegate, MemoTextViewZoomDelegate
             return
         }
 
-        closeTab(id: id)
+        requestCloseTab(id: id)
     }
 
     func selectNextTab() {
@@ -286,7 +380,7 @@ final class MemoEditorView: NSView, NSTextViewDelegate, MemoTextViewZoomDelegate
     }
 
     func tabBarView(_ tabBarView: MemoTabBarView, didCloseTab id: String) {
-        closeTab(id: id)
+        requestCloseTab(id: id)
     }
 
     private var currentTab: MemoTab? {
@@ -302,6 +396,7 @@ final class MemoEditorView: NSView, NSTextViewDelegate, MemoTextViewZoomDelegate
             return
         }
 
+        updateCurrentTabTitle()
         let snapshot = NSAttributedString(attributedString: textView.attributedString())
         save(snapshot: snapshot, tab: tab, waitUntilDone: waitUntilDone, showError: showError)
         saveSession(waitUntilDone: waitUntilDone)
@@ -319,17 +414,41 @@ final class MemoEditorView: NSView, NSTextViewDelegate, MemoTextViewZoomDelegate
         window?.makeFirstResponder(textView)
     }
 
+    private func requestCloseTab(id: String) {
+        guard confirmCloseTab(id: id) else {
+            window?.makeFirstResponder(textView)
+            return
+        }
+
+        closeTab(id: id)
+    }
+
+    private func confirmCloseTab(id: String) -> Bool {
+        guard let tab = tabs.first(where: { $0.id == id }) else {
+            return false
+        }
+
+        let alert = NSAlert()
+        alert.messageText = "탭을 닫을까요?"
+        alert.informativeText = "\"\(tab.title)\" 탭이 삭제됩니다."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "닫기")
+        alert.addButton(withTitle: "취소")
+
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
     private func closeTab(id: String) {
         guard let closingIndex = tabs.firstIndex(where: { $0.id == id }) else {
             return
         }
 
         if id == selectedTabID {
-            autosaveCurrentTab(waitUntilDone: false, showError: false)
+            autosaveWorkItem?.cancel()
         }
 
         let removedTab = tabs.remove(at: closingIndex)
-        storage.delete(tab: removedTab)
+        delete(tab: removedTab)
 
         if tabs.isEmpty {
             tabs.append(MemoTab.create(index: 1))
@@ -362,13 +481,14 @@ final class MemoEditorView: NSView, NSTextViewDelegate, MemoTextViewZoomDelegate
         }
 
         let fallbackTitle = tabs[index].title
-        let newTitle = titleFromCurrentText(fallback: fallbackTitle)
+        let newTitle = normalizedTitle(titleTextField.stringValue, fallback: fallbackTitle)
 
-        guard tabs[index].title != newTitle else {
+        guard tabs[index].title != newTitle || !tabs[index].hasSeparateTitle else {
             return
         }
 
         tabs[index].title = newTitle
+        tabs[index].hasSeparateTitle = true
         refreshTabBar()
         saveSession()
     }
@@ -382,18 +502,53 @@ final class MemoEditorView: NSView, NSTextViewDelegate, MemoTextViewZoomDelegate
         layoutSubtreeIfNeeded()
     }
 
-    private func titleFromCurrentText(fallback: String) -> String {
-        let lines = textView.string.split(whereSeparator: \.isNewline)
+    private func normalizedTitle(_ title: String, fallback: String) -> String {
+        let firstLine = title.split(maxSplits: 1, whereSeparator: \.isNewline).first.map(String.init) ?? ""
+        let trimmedTitle = firstLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedTitle.isEmpty ? fallback : trimmedTitle
+    }
 
-        for line in lines {
-            let title = String(line).trimmingCharacters(in: .whitespacesAndNewlines)
-
-            if !title.isEmpty {
-                return String(title.prefix(24))
-            }
+    @discardableResult
+    private func migrateLegacyTitle(for tab: MemoTab) -> Bool {
+        guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else {
+            return false
         }
 
-        return fallback.hasPrefix("메모 ") ? fallback : "메모 \(nextTabNumber())"
+        let migratedTitle = removeLegacyTitleFromBody() ?? tab.title
+        tabs[index].title = normalizedTitle(migratedTitle, fallback: tab.title)
+        tabs[index].hasSeparateTitle = true
+        return true
+    }
+
+    private func markCurrentTabAsUsingSeparateTitle() {
+        guard let selectedTabID, let index = tabs.firstIndex(where: { $0.id == selectedTabID }) else {
+            return
+        }
+
+        tabs[index].hasSeparateTitle = true
+    }
+
+    private func removeLegacyTitleFromBody() -> String? {
+        guard let textStorage = textView.textStorage else {
+            return nil
+        }
+
+        let string = textStorage.string as NSString
+        var location = 0
+
+        while location < string.length {
+            let lineRange = string.lineRange(for: NSRange(location: location, length: 0))
+            let title = string.substring(with: lineRange).trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if !title.isEmpty {
+                textStorage.replaceCharacters(in: NSRange(location: 0, length: NSMaxRange(lineRange)), with: "")
+                return title
+            }
+
+            location = NSMaxRange(lineRange)
+        }
+
+        return nil
     }
 
     private func nextTabNumber() -> Int {
@@ -436,6 +591,7 @@ final class MemoEditorView: NSView, NSTextViewDelegate, MemoTextViewZoomDelegate
         lineNumberRuler?.fontSize = clampedSize
         lineNumberRuler?.rebuildLineStarts()
         lineNumberRuler?.needsDisplay = true
+        normalizeCurrentTypingAttributes()
         scheduleAutosave()
     }
 
@@ -477,16 +633,15 @@ final class MemoEditorView: NSView, NSTextViewDelegate, MemoTextViewZoomDelegate
 
         let fullString = textStorage.string as NSString
         textStorage.beginEditing()
-        fullString.enumerateSubstrings(in: fullRange, options: [.byParagraphs, .substringNotRequired]) { _, paragraphRange, _, _ in
-            let alignment = self.paragraphAlignment(in: textStorage, at: min(paragraphRange.location, max(0, textStorage.length - 1)))
-            textStorage.addAttribute(.paragraphStyle, value: self.paragraphStyle(alignment: alignment), range: paragraphRange)
+        let source = NSAttributedString(attributedString: textStorage)
+
+        for paragraphRange in paragraphRanges(in: fullString, length: textStorage.length) {
+            let alignment = paragraphAlignment(in: source, at: min(paragraphRange.location, max(0, source.length - 1)))
+            textStorage.addAttribute(.paragraphStyle, value: paragraphStyle(alignment: alignment), range: paragraphRange)
         }
         textStorage.endEditing()
 
-        var attributes = textView.typingAttributes
-        let currentStyle = attributes[.paragraphStyle] as? NSParagraphStyle
-        attributes[.paragraphStyle] = paragraphStyle(alignment: currentStyle?.alignment ?? .left)
-        textView.typingAttributes = attributes
+        normalizeCurrentTypingAttributes()
     }
 
     private func scheduleAutosave() {
@@ -545,6 +700,12 @@ final class MemoEditorView: NSView, NSTextViewDelegate, MemoTextViewZoomDelegate
         }
     }
 
+    private func delete(tab: MemoTab) {
+        saveQueue.async { [storage, tab] in
+            storage.delete(tab: tab)
+        }
+    }
+
     private func editorFont(size: CGFloat) -> NSFont {
         NSFont(name: baseFontName, size: size) ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
     }
@@ -575,6 +736,103 @@ final class MemoEditorView: NSView, NSTextViewDelegate, MemoTextViewZoomDelegate
         let safeLocation = min(max(0, location), text.length - 1)
         let paragraphStyle = text.attribute(.paragraphStyle, at: safeLocation, effectiveRange: nil) as? NSParagraphStyle
         return paragraphStyle?.alignment ?? .left
+    }
+
+    private func normalizeTextAttributesInCurrentDocument() {
+        guard !isNormalizingTextAttributes, !textView.hasMarkedText(), let textStorage = textView.textStorage else {
+            normalizeCurrentTypingAttributes()
+            return
+        }
+
+        guard textStorage.length > 0 else {
+            textView.typingAttributes = defaultTypingAttributes(alignment: .left)
+            return
+        }
+
+        isNormalizingTextAttributes = true
+        let undoManager = textView.undoManager
+        let shouldRestoreUndo = undoManager?.isUndoRegistrationEnabled == true
+
+        if shouldRestoreUndo {
+            undoManager?.disableUndoRegistration()
+        }
+
+        textStorage.beginEditing()
+        let source = NSAttributedString(attributedString: textStorage)
+        applyDefaultAttributes(to: textStorage, preservingAlignmentFrom: source)
+
+        textStorage.endEditing()
+
+        if shouldRestoreUndo {
+            undoManager?.enableUndoRegistration()
+        }
+
+        isNormalizingTextAttributes = false
+        normalizeCurrentTypingAttributes()
+    }
+
+    private func normalizeCurrentTypingAttributes() {
+        guard !isNormalizingTypingAttributes else {
+            return
+        }
+
+        isNormalizingTypingAttributes = true
+        textView.typingAttributes = normalizedTypingAttributes(from: textView.typingAttributes)
+        isNormalizingTypingAttributes = false
+    }
+
+    private func normalizedTypingAttributes(from attributes: [NSAttributedString.Key: Any]) -> [NSAttributedString.Key: Any] {
+        let alignment = (attributes[.paragraphStyle] as? NSParagraphStyle)?.alignment ?? currentParagraphAlignment()
+        return defaultTypingAttributes(alignment: alignment)
+    }
+
+    private func currentParagraphAlignment() -> NSTextAlignment {
+        guard let textStorage = textView.textStorage, textStorage.length > 0 else {
+            return .left
+        }
+
+        let selectedRange = textView.selectedRange()
+        let safeLocation = min(max(0, selectedRange.location), textStorage.length - 1)
+        return paragraphAlignment(in: textStorage, at: safeLocation)
+    }
+
+    private func applyDefaultAttributes(to textStorage: NSMutableAttributedString, preservingAlignmentFrom source: NSAttributedString) {
+        let fullRange = NSRange(location: 0, length: textStorage.length)
+        guard fullRange.length > 0 else {
+            return
+        }
+
+        textStorage.setAttributes(defaultTypingAttributes(alignment: .left), range: fullRange)
+
+        let fullString = textStorage.string as NSString
+        for paragraphRange in paragraphRanges(in: fullString, length: textStorage.length) {
+            let alignment = paragraphAlignment(in: source, at: min(paragraphRange.location, max(0, source.length - 1)))
+            textStorage.setAttributes(defaultTypingAttributes(alignment: alignment), range: paragraphRange)
+        }
+    }
+
+    private func paragraphRanges(in string: NSString, length: Int) -> [NSRange] {
+        guard length > 0 else {
+            return []
+        }
+
+        let fullRange = NSRange(location: 0, length: length)
+        var ranges: [NSRange] = []
+        var location = 0
+
+        while location < length {
+            let paragraphRange = string.paragraphRange(for: NSRange(location: location, length: 0))
+            let safeRange = NSIntersectionRange(paragraphRange, fullRange)
+
+            if safeRange.length > 0 {
+                ranges.append(safeRange)
+            }
+
+            let nextLocation = max(NSMaxRange(paragraphRange), location + 1)
+            location = min(nextLocation, length)
+        }
+
+        return ranges
     }
 
     private func defaultTypingAttributes(alignment: NSTextAlignment) -> [NSAttributedString.Key: Any] {

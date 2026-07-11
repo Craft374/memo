@@ -60,9 +60,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editMenu.addItem(withTitle: "붙여넣기", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         editMenu.addItem(withTitle: "전체 선택", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editMenu.addItem(.separator())
-        editMenu.addItem(withTitle: "왼쪽 정렬", action: #selector(alignLeft(_:)), keyEquivalent: "l").target = self
-        editMenu.addItem(withTitle: "가운데 정렬", action: #selector(alignCenter(_:)), keyEquivalent: "e").target = self
-        editMenu.addItem(withTitle: "오른쪽 정렬", action: #selector(alignRight(_:)), keyEquivalent: "r").target = self
+        editMenu.addItem(withTitle: "왼쪽 정렬", action: #selector(alignLeft(_:)), keyEquivalent: "").target = self
+        editMenu.addItem(withTitle: "가운데 정렬", action: #selector(alignCenter(_:)), keyEquivalent: "").target = self
+        editMenu.addItem(withTitle: "오른쪽 정렬", action: #selector(alignRight(_:)), keyEquivalent: "").target = self
 
         let viewMenuItem = NSMenuItem(title: "보기", action: nil, keyEquivalent: "")
         mainMenu.addItem(viewMenuItem)
@@ -91,6 +91,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let nextTabItem = tabMenu.addItem(withTitle: "다음 탭", action: #selector(nextTab(_:)), keyEquivalent: "]")
         nextTabItem.target = self
+
+        let previousTabControlItem = tabMenu.addItem(withTitle: "이전 탭", action: #selector(previousTab(_:)), keyEquivalent: "\t")
+        previousTabControlItem.target = self
+        previousTabControlItem.keyEquivalentModifierMask = [.control, .shift]
+
+        let nextTabControlItem = tabMenu.addItem(withTitle: "다음 탭", action: #selector(nextTab(_:)), keyEquivalent: "\t")
+        nextTabControlItem.target = self
+        nextTabControlItem.keyEquivalentModifierMask = [.control]
 
         let windowMenuItem = NSMenuItem(title: "창", action: nil, keyEquivalent: "")
         mainMenu.addItem(windowMenuItem)

@@ -9,13 +9,27 @@ final class MemoTextView: NSTextView {
 
     private var wheelRemainder: CGFloat = 0
 
+    override func insertText(_ insertString: Any, replacementRange: NSRange) {
+        if let text = insertString as? String {
+            super.insertText(sanitizedText(text), replacementRange: replacementRange)
+            return
+        }
+
+        if let text = insertString as? NSAttributedString {
+            super.insertText(sanitizedText(text.string), replacementRange: replacementRange)
+            return
+        }
+
+        super.insertText(insertString, replacementRange: replacementRange)
+    }
+
     override func paste(_ sender: Any?) {
         guard let text = NSPasteboard.general.string(forType: .string) else {
             super.paste(sender)
             return
         }
 
-        insertText(sanitizedPasteText(text), replacementRange: selectedRange())
+        insertText(sanitizedText(text), replacementRange: selectedRange())
     }
 
     override func scrollWheel(with event: NSEvent) {
@@ -41,7 +55,7 @@ final class MemoTextView: NSTextView {
         }
     }
 
-    private func sanitizedPasteText(_ text: String) -> String {
+    private func sanitizedText(_ text: String) -> String {
         var result = ""
         result.reserveCapacity(text.count)
 

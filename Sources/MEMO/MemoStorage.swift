@@ -113,7 +113,11 @@ final class MemoStorage {
 
             seen.insert(id)
             let title = tab.title.trimmingCharacters(in: .whitespacesAndNewlines)
-            return MemoTab(id: id, title: title.isEmpty ? "메모 \(seen.count)" : title)
+            return MemoTab(
+                id: id,
+                title: title.isEmpty ? "메모 \(seen.count)" : title,
+                hasSeparateTitle: tab.hasSeparateTitle
+            )
         }
     }
 

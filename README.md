@@ -3,7 +3,7 @@
 맥에서 바로 켜서 쓰는 아주 단순한 메모 앱
 
 CotEditor보다 더 가볍게, 메모만 빠르게 적으려고 제작했습니다.
-현재 0.1.3v
+현재 0.1.4v
 
 윈도우 버전(C# WinForms)은 [`windows` 브랜치](https://github.com/Craft374/memo/tree/windows)에 있습니다.
 
@@ -23,9 +23,10 @@ open build/MEMO.app
 - 탭별 자동 저장
 - 내부 저장 폴더 사용
 - 직접 만든 단순 앱 아이콘
-- Command + 마우스 휠 0.25pt 단위 글자 크기 조절
+- Command + 마우스 휠 0.25pt 단위 글자 크기 조절, 최대 300pt 확대
 - 메뉴에서 왼쪽, 가운데, 오른쪽 정렬
 - 탭 위쪽 UI에서 x로 탭 닫기
+- 탭 닫기 전 확인창 표시
 - 탭이 2개 이상일 때만 탭 UI 표시
 - 긴 줄이 화면에서 접혀도 줄번호는 증가하지 않음
 - 웹/트위터 복사 붙여넣기 시 서식 제거
@@ -36,8 +37,8 @@ open build/MEMO.app
 - `Command + D`: 새 탭
 - `Command + W`: 현재 탭 닫기
 - `Command + [` / `Command + ]`: 이전/다음 탭
+- `Control + Tab` / `Shift + Control + Tab`: 다음/이전 탭
 - `Command + S`: 지금 저장
-- `Command + L` / `Command + E` / `Command + R`: 왼쪽/가운데/오른쪽 정렬
 - `Command + +` / `Command + -` / `Command + 0`: 글자 크게/작게/초기화
 - `Command + Option + W`: 자동 줄바꿈 켜기/끄기
 
