@@ -26,6 +26,7 @@ internal static class NativeMethods
     public const uint CFM_FACE = 0x20000000;
     public const uint CFM_COLOR = 0x40000000;
     public const uint CFM_SIZE = 0x80000000;
+    public const uint PFM_TABSTOPS = 0x00000010;
     public const uint PFM_LINESPACING = 0x00000100;
 
     public const int GWL_STYLE = -16;

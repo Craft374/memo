@@ -2,6 +2,8 @@ namespace Memo;
 
 public sealed class MemoRichTextBox : RichTextBox
 {
+    private const int TabStopTwips = 360;
+
     public event Action<int>? ZoomStepRequested;
     public event Action? ViewChanged;
     public event Action? ImeCompositionEnded;
@@ -72,13 +74,19 @@ public sealed class MemoRichTextBox : RichTextBox
     {
         int selectionStart = SelectionStart;
         int selectionLength = SelectionLength;
+        var tabStops = new int[32];
+        for (int i = 0; i < tabStops.Length; i++)
+        {
+            tabStops[i] = (i + 1) * TabStopTwips;
+        }
 
         SelectAll();
         var format = new NativeMethods.PARAFORMAT2
         {
             cbSize = System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.PARAFORMAT2>(),
-            dwMask = NativeMethods.PFM_LINESPACING,
-            rgxTabs = new int[32],
+            dwMask = NativeMethods.PFM_LINESPACING | NativeMethods.PFM_TABSTOPS,
+            cTabCount = (short)tabStops.Length,
+            rgxTabs = tabStops,
             dyLineSpacing = GetLineSpacingTwips(Font),
             bLineSpacingRule = 4,
         };
@@ -199,6 +207,18 @@ public sealed class MemoRichTextBox : RichTextBox
 
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
+        if (keyData == Keys.Tab && !IsImeComposing)
+        {
+            SelectedText = "\t";
+            return true;
+        }
+
+        if (keyData == Keys.Enter && SelectionLength == 0 && !IsImeComposing &&
+            TryHandleNumberedListEnter())
+        {
+            return true;
+        }
+
         if (keyData == Keys.Down && SelectionLength == 0 && !IsImeComposing && IsCaretOnLastPhysicalLine())
         {
             Select(TextLength, 0);
@@ -306,6 +326,66 @@ public sealed class MemoRichTextBox : RichTextBox
 
         IsImeComposing = false;
         ImeCompositionEnded?.Invoke();
+    }
+
+    private bool TryHandleNumberedListEnter()
+    {
+        int caret = SelectionStart;
+        int lineStart = caret == 0 ? 0 : Text.LastIndexOf('\n', caret - 1) + 1;
+        int lineEnd = Text.IndexOf('\n', caret);
+        if (lineEnd < 0)
+        {
+            lineEnd = TextLength;
+        }
+
+        if (caret != lineEnd)
+        {
+            return false;
+        }
+
+        string line = Text[lineStart..caret];
+        int index = 0;
+        while (index < line.Length && (line[index] == ' ' || line[index] == '\t'))
+        {
+            index++;
+        }
+
+        string indentation = line[..index];
+        int numberStart = index;
+        while (index < line.Length && char.IsAsciiDigit(line[index]))
+        {
+            index++;
+        }
+
+        if (index == numberStart || index >= line.Length || line[index] != '.')
+        {
+            return false;
+        }
+
+        string numberText = line[numberStart..index];
+        index++;
+        int spacingStart = index;
+        while (index < line.Length && (line[index] == ' ' || line[index] == '\t'))
+        {
+            index++;
+        }
+
+        if (index == spacingStart ||
+            !long.TryParse(numberText, out long number) ||
+            number == long.MaxValue)
+        {
+            return false;
+        }
+
+        if (index == line.Length)
+        {
+            Select(lineStart, caret - lineStart);
+            SelectedText = "";
+            return true;
+        }
+
+        SelectedText = $"\n{indentation}{number + 1}. ";
+        return true;
     }
 
     private bool IsCaretOnLastPhysicalLine() =>
