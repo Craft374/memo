@@ -60,6 +60,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editMenu.addItem(withTitle: "붙여넣기", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         editMenu.addItem(withTitle: "전체 선택", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: "검색…", action: #selector(showFind(_:)), keyEquivalent: "f").target = self
+        editMenu.addItem(withTitle: "다음 찾기", action: #selector(findNext(_:)), keyEquivalent: "g").target = self
+        let replaceItem = editMenu.addItem(withTitle: "바꾸기…", action: #selector(showReplace(_:)), keyEquivalent: "f")
+        replaceItem.target = self
+        replaceItem.keyEquivalentModifierMask = [.command, .option]
+        editMenu.addItem(.separator())
         editMenu.addItem(withTitle: "왼쪽 정렬", action: #selector(alignLeft(_:)), keyEquivalent: "").target = self
         editMenu.addItem(withTitle: "가운데 정렬", action: #selector(alignCenter(_:)), keyEquivalent: "").target = self
         editMenu.addItem(withTitle: "오른쪽 정렬", action: #selector(alignRight(_:)), keyEquivalent: "").target = self
@@ -164,6 +170,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func alignRight(_ sender: Any?) {
         windowController?.setAlignment(.right)
+    }
+
+    @objc private func showFind(_ sender: Any?) {
+        windowController?.showFind()
+    }
+
+    @objc private func findNext(_ sender: Any?) {
+        windowController?.findNext()
+    }
+
+    @objc private func showReplace(_ sender: Any?) {
+        windowController?.showReplace()
     }
 
     private func updateLineWrapMenuItem() {

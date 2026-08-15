@@ -27,6 +27,9 @@ final class MemoEditorView: NSView, NSTextViewDelegate, NSTextFieldDelegate, Mem
     private var isLoadingTab = false
     private var isNormalizingTextAttributes = false
     private var isNormalizingTypingAttributes = false
+    private var lastSearchPattern = ""
+    private var lastSearchUsesRegularExpression = false
+    private var lastFoundRange: NSRange?
 
     override init(frame frameRect: NSRect) {
         let savedFontSize = UserDefaults.standard.double(forKey: userDefaultsFontSizeKey)
@@ -338,6 +341,140 @@ final class MemoEditorView: NSView, NSTextViewDelegate, NSTextFieldDelegate, Mem
         scheduleAutosave()
     }
 
+    func showFind() {
+        let alert = NSAlert()
+        alert.messageText = "검색"
+        alert.informativeText = "일반 검색과 정규식을 사용할 수 있습니다."
+
+        let accessoryView = NSView(frame: NSRect(x: 0, y: 0, width: 340, height: 64))
+        let searchField = NSSearchField(frame: NSRect(x: 0, y: 34, width: 340, height: 24))
+        searchField.placeholderString = "찾을 내용"
+        searchField.stringValue = lastSearchPattern
+
+        let regularExpressionButton = NSButton(
+            checkboxWithTitle: "정규식",
+            target: nil,
+            action: nil
+        )
+        regularExpressionButton.frame = NSRect(x: 0, y: 2, width: 90, height: 24)
+        regularExpressionButton.state = lastSearchUsesRegularExpression ? .on : .off
+
+        accessoryView.addSubview(searchField)
+        accessoryView.addSubview(regularExpressionButton)
+        alert.accessoryView = accessoryView
+        alert.addButton(withTitle: "다음 찾기")
+        alert.addButton(withTitle: "취소")
+        alert.window.initialFirstResponder = searchField
+
+        guard alert.runModal() == .alertFirstButtonReturn else {
+            window?.makeFirstResponder(textView)
+            return
+        }
+
+        updateSearchOptions(
+            pattern: searchField.stringValue,
+            usesRegularExpression: regularExpressionButton.state == .on
+        )
+
+        guard !lastSearchPattern.isEmpty else {
+            showMessage("검색", detail: "찾을 내용을 입력해주세요.")
+            return
+        }
+
+        findNext()
+    }
+
+    func findNext() {
+        guard !lastSearchPattern.isEmpty else {
+            showFind()
+            return
+        }
+
+        do {
+            let expression = try currentSearchExpression()
+            let selection = textView.selectedRange()
+            var start = NSMaxRange(selection)
+
+            if selection.length == 0, selection == lastFoundRange {
+                start += 1
+            }
+
+            guard let match = MemoTextLogic.nextMatch(
+                in: textView.string,
+                expression: expression,
+                startingAt: start
+            ) else {
+                showMessage("검색 결과 없음", detail: "찾는 내용이 없습니다.")
+                return
+            }
+
+            lastFoundRange = match.range
+            textView.setSelectedRange(match.range)
+            textView.scrollRangeToVisible(match.range)
+            window?.makeFirstResponder(textView)
+        } catch {
+            showMessage("정규식 오류", detail: error.localizedDescription)
+        }
+    }
+
+    func showReplace() {
+        let alert = NSAlert()
+        alert.messageText = "바꾸기"
+        alert.informativeText = "정규식에서는 $1 형식으로 그룹을 사용할 수 있습니다."
+
+        let accessoryView = NSView(frame: NSRect(x: 0, y: 0, width: 340, height: 100))
+        let searchField = NSSearchField(frame: NSRect(x: 0, y: 70, width: 340, height: 24))
+        searchField.placeholderString = "찾을 내용"
+        searchField.stringValue = lastSearchPattern
+
+        let replacementField = NSTextField(frame: NSRect(x: 0, y: 38, width: 340, height: 24))
+        replacementField.placeholderString = "바꿀 내용"
+
+        let regularExpressionButton = NSButton(
+            checkboxWithTitle: "정규식",
+            target: nil,
+            action: nil
+        )
+        regularExpressionButton.frame = NSRect(x: 0, y: 4, width: 90, height: 24)
+        regularExpressionButton.state = lastSearchUsesRegularExpression ? .on : .off
+
+        accessoryView.addSubview(searchField)
+        accessoryView.addSubview(replacementField)
+        accessoryView.addSubview(regularExpressionButton)
+        alert.accessoryView = accessoryView
+        alert.addButton(withTitle: "하나 바꾸기")
+        alert.addButton(withTitle: "모두 바꾸기")
+        alert.addButton(withTitle: "취소")
+        alert.window.initialFirstResponder = searchField
+
+        let response = alert.runModal()
+        guard response == .alertFirstButtonReturn || response == .alertSecondButtonReturn else {
+            window?.makeFirstResponder(textView)
+            return
+        }
+
+        updateSearchOptions(
+            pattern: searchField.stringValue,
+            usesRegularExpression: regularExpressionButton.state == .on
+        )
+
+        guard !lastSearchPattern.isEmpty else {
+            showMessage("바꾸기", detail: "찾을 내용을 입력해주세요.")
+            return
+        }
+
+        do {
+            let expression = try currentSearchExpression()
+            if response == .alertFirstButtonReturn {
+                replaceOne(with: replacementField.stringValue, expression: expression)
+            } else {
+                replaceAll(with: replacementField.stringValue, expression: expression)
+            }
+        } catch {
+            showMessage("정규식 오류", detail: error.localizedDescription)
+        }
+    }
+
     func createNewTab() {
         autosaveCurrentTab(waitUntilDone: false, showError: false)
 
@@ -583,6 +720,11 @@ final class MemoEditorView: NSView, NSTextViewDelegate, NSTextFieldDelegate, Mem
             textStorage.addAttribute(.font, value: font, range: fullRange)
         }
 
+        textView.layoutManager?.invalidateLayout(forCharacterRange: fullRange, actualCharacterRange: nil)
+        textView.layoutManager?.invalidateDisplay(forCharacterRange: fullRange)
+        textView.setNeedsDisplay(textView.visibleRect)
+        scrollView.contentView.needsDisplay = true
+
         var typingAttributes = textView.typingAttributes
         typingAttributes[.font] = font
         typingAttributes[.foregroundColor] = textColor
@@ -593,6 +735,88 @@ final class MemoEditorView: NSView, NSTextViewDelegate, NSTextFieldDelegate, Mem
         lineNumberRuler?.needsDisplay = true
         normalizeCurrentTypingAttributes()
         scheduleAutosave()
+    }
+
+    private func updateSearchOptions(pattern: String, usesRegularExpression: Bool) {
+        lastSearchPattern = pattern
+        lastSearchUsesRegularExpression = usesRegularExpression
+        lastFoundRange = nil
+    }
+
+    private func currentSearchExpression() throws -> NSRegularExpression {
+        try MemoTextLogic.searchExpression(
+            pattern: lastSearchPattern,
+            usesRegularExpression: lastSearchUsesRegularExpression
+        )
+    }
+
+    private func replaceOne(with replacement: String, expression: NSRegularExpression) {
+        let source = textView.string
+        let selection = textView.selectedRange()
+        let selectedMatch = expression.firstMatch(in: source, range: selection)
+        let match = selectedMatch?.range == selection
+            ? selectedMatch
+            : MemoTextLogic.nextMatch(in: source, expression: expression, startingAt: NSMaxRange(selection))
+
+        guard let match else {
+            showMessage("바꾸기", detail: "찾는 내용이 없습니다.")
+            return
+        }
+
+        let template = replacementTemplate(replacement)
+        let resolvedReplacement = expression.replacementString(
+            for: match,
+            in: source,
+            offset: 0,
+            template: template
+        )
+        let replacementRange = NSRange(location: match.range.location, length: (resolvedReplacement as NSString).length)
+
+        textView.insertText(resolvedReplacement, replacementRange: match.range)
+        textView.setSelectedRange(replacementRange)
+        lastFoundRange = nil
+        findNext()
+    }
+
+    private func replaceAll(with replacement: String, expression: NSRegularExpression) {
+        let source = textView.string
+        let fullRange = NSRange(location: 0, length: (source as NSString).length)
+        let matches = expression.matches(in: source, range: fullRange)
+
+        guard !matches.isEmpty else {
+            showMessage("바꾸기", detail: "찾는 내용이 없습니다.")
+            return
+        }
+
+        let template = replacementTemplate(replacement)
+        textView.undoManager?.beginUndoGrouping()
+        for match in matches.reversed() {
+            let resolvedReplacement = expression.replacementString(
+                for: match,
+                in: source,
+                offset: 0,
+                template: template
+            )
+            textView.insertText(resolvedReplacement, replacementRange: match.range)
+        }
+        textView.undoManager?.endUndoGrouping()
+
+        lastFoundRange = nil
+        window?.makeFirstResponder(textView)
+        showMessage("바꾸기 완료", detail: "\(matches.count)개를 바꿨습니다.")
+    }
+
+    private func replacementTemplate(_ replacement: String) -> String {
+        lastSearchUsesRegularExpression ? replacement : NSRegularExpression.escapedTemplate(for: replacement)
+    }
+
+    private func showMessage(_ title: String, detail: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = detail
+        alert.addButton(withTitle: "확인")
+        alert.runModal()
+        window?.makeFirstResponder(textView)
     }
 
     private func applyLineWrapSetting() {

@@ -32,6 +32,35 @@ final class MemoTextView: NSTextView {
         insertText(sanitizedText(text), replacementRange: selectedRange())
     }
 
+    override func copy(_ sender: Any?) {
+        let range = selectedRange()
+        guard range.length > 0 else {
+            return
+        }
+
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString((string as NSString).substring(with: range), forType: .string)
+    }
+
+    override func cut(_ sender: Any?) {
+        let range = selectedRange()
+        guard range.length > 0 else {
+            return
+        }
+
+        copy(sender)
+        insertText("", replacementRange: range)
+    }
+
+    override func insertNewline(_ sender: Any?) {
+        if let edit = MemoTextLogic.numberedListEdit(in: string as NSString, selectedRange: selectedRange()) {
+            insertText(edit.replacement, replacementRange: edit.range)
+            return
+        }
+
+        super.insertNewline(sender)
+    }
+
     override func scrollWheel(with event: NSEvent) {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         guard flags.contains(.command) else {

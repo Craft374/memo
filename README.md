@@ -30,6 +30,9 @@ open build/MEMO.app
 - 탭이 2개 이상일 때만 탭 UI 표시
 - 긴 줄이 화면에서 접혀도 줄번호는 증가하지 않음
 - 웹/트위터 복사 붙여넣기 시 서식 제거
+- 다른 앱으로 복사할 때 일반 텍스트로 복사
+- 일반 검색과 정규식 검색·바꾸기
+- `1.`처럼 시작한 번호 목록 자동 이어쓰기
 - 메뉴에서 자동 줄바꿈 켜기/끄기
 
 ## 단축키
@@ -39,6 +42,9 @@ open build/MEMO.app
 - `Command + [` / `Command + ]`: 이전/다음 탭
 - `Control + Tab` / `Shift + Control + Tab`: 다음/이전 탭
 - `Command + S`: 지금 저장
+- `Command + F`: 검색
+- `Command + G`: 다음 찾기
+- `Command + Option + F`: 바꾸기
 - `Command + +` / `Command + -` / `Command + 0`: 글자 크게/작게/초기화
 - `Command + Option + W`: 자동 줄바꿈 켜기/끄기
 

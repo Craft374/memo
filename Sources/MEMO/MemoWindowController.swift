@@ -64,6 +64,18 @@ final class MemoWindowController: NSWindowController, NSWindowDelegate {
         editorView.setAlignment(alignment)
     }
 
+    func showFind() {
+        editorView.showFind()
+    }
+
+    func findNext() {
+        editorView.findNext()
+    }
+
+    func showReplace() {
+        editorView.showReplace()
+    }
+
     func createNewTab() {
         editorView.createNewTab()
     }
