@@ -12,15 +12,18 @@ final class MemoTextView: NSTextView {
     override func insertText(_ insertString: Any, replacementRange: NSRange) {
         if let text = insertString as? String {
             super.insertText(sanitizedText(text), replacementRange: replacementRange)
+            breakUndoCoalescing()
             return
         }
 
         if let text = insertString as? NSAttributedString {
             super.insertText(sanitizedText(text.string), replacementRange: replacementRange)
+            breakUndoCoalescing()
             return
         }
 
         super.insertText(insertString, replacementRange: replacementRange)
+        breakUndoCoalescing()
     }
 
     override func paste(_ sender: Any?) {
@@ -53,12 +56,20 @@ final class MemoTextView: NSTextView {
     }
 
     override func insertNewline(_ sender: Any?) {
-        if let edit = MemoTextLogic.numberedListEdit(in: string as NSString, selectedRange: selectedRange()) {
+        if let edit = MemoTextLogic.listEdit(in: string as NSString, selectedRange: selectedRange()) {
             insertText(edit.replacement, replacementRange: edit.range)
             return
         }
 
         super.insertNewline(sender)
+    }
+
+    override func insertTab(_ sender: Any?) {
+        applyIndentation(outdent: false)
+    }
+
+    override func insertBacktab(_ sender: Any?) {
+        applyIndentation(outdent: true)
     }
 
     override func scrollWheel(with event: NSEvent) {
@@ -100,5 +111,20 @@ final class MemoTextView: NSTextView {
         }
 
         return result
+    }
+
+    private func applyIndentation(outdent: Bool) {
+        guard let edit = MemoTextLogic.indentationEdit(
+            in: string as NSString,
+            selectedRange: selectedRange(),
+            outdent: outdent
+        ) else {
+            return
+        }
+
+        insertText(edit.replacement, replacementRange: edit.range)
+        if let selection = edit.selection {
+            setSelectedRange(selection)
+        }
     }
 }
