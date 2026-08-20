@@ -73,5 +73,17 @@ enum MemoTextLogicCheck {
         )
         let wrapped = MemoTextLogic.nextMatch(in: "a.b x", expression: literal, startingAt: 5)
         assert(wrapped?.range == NSRange(location: 0, length: 3))
+
+        assert(MemoTextLogic.isHorizontalRuleLine("___"))
+        assert(MemoTextLogic.isHorizontalRuleLine("_____"))
+        assert(MemoTextLogic.isHorizontalRuleLine("  ___  "))
+        assert(!MemoTextLogic.isHorizontalRuleLine("__"))
+        assert(!MemoTextLogic.isHorizontalRuleLine("___x"))
+        assert(!MemoTextLogic.isHorizontalRuleLine(""))
+
+        let ruleRanges = MemoTextLogic.horizontalRuleLineRanges(in: "hello\n___\nworld\n____\n" as NSString)
+        assert(ruleRanges == [NSRange(location: 6, length: 3), NSRange(location: 16, length: 4)])
+
+        assert(MemoTextLogic.horizontalRuleLineRanges(in: "no rules here" as NSString).isEmpty)
     }
 }

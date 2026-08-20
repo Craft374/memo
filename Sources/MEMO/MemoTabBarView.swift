@@ -3,6 +3,7 @@ import AppKit
 protocol MemoTabBarViewDelegate: AnyObject {
     func tabBarView(_ tabBarView: MemoTabBarView, didSelectTab id: String)
     func tabBarView(_ tabBarView: MemoTabBarView, didCloseTab id: String)
+    func tabBarView(_ tabBarView: MemoTabBarView, didReorderTabs tabs: [MemoTab])
 }
 
 final class MemoTabBarView: NSView {
@@ -12,6 +13,9 @@ final class MemoTabBarView: NSView {
     private var selectedTabID: String?
     private var tabRects: [String: NSRect] = [:]
     private var closeRects: [String: NSRect] = [:]
+    private var draggingTabID: String?
+    private var dragStartPoint: NSPoint = .zero
+    private var hasDraggedPastThreshold = false
 
     private let backgroundColor = NSColor(calibratedRed: 0.055, green: 0.058, blue: 0.064, alpha: 1)
     private let selectedColor = NSColor(calibratedRed: 0.10, green: 0.105, blue: 0.115, alpha: 1)
@@ -106,8 +110,71 @@ final class MemoTabBarView: NSView {
         }
 
         for (id, rect) in tabRects where rect.contains(point) {
-            delegate?.tabBarView(self, didSelectTab: id)
+            draggingTabID = id
+            dragStartPoint = point
+            hasDraggedPastThreshold = false
             return
         }
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let draggingTabID else {
+            return
+        }
+
+        let point = convert(event.locationInWindow, from: nil)
+
+        if !hasDraggedPastThreshold {
+            guard abs(point.x - dragStartPoint.x) > 4 else {
+                return
+            }
+            hasDraggedPastThreshold = true
+        }
+
+        guard let targetIndex = tabIndex(forX: point.x),
+              let reordered = reorderedTabs(moving: draggingTabID, toIndex: targetIndex) else {
+            return
+        }
+
+        tabs = reordered
+        needsDisplay = true
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard let draggingTabID else {
+            return
+        }
+
+        defer {
+            self.draggingTabID = nil
+            hasDraggedPastThreshold = false
+        }
+
+        if hasDraggedPastThreshold {
+            delegate?.tabBarView(self, didReorderTabs: tabs)
+        } else if let rect = tabRects[draggingTabID], rect.contains(convert(event.locationInWindow, from: nil)) {
+            delegate?.tabBarView(self, didSelectTab: draggingTabID)
+        }
+    }
+
+    private func tabIndex(forX x: CGFloat) -> Int? {
+        for (index, tab) in tabs.enumerated() {
+            guard let rect = tabRects[tab.id], x < rect.maxX else {
+                continue
+            }
+            return index
+        }
+        return tabs.indices.last
+    }
+
+    private func reorderedTabs(moving id: String, toIndex targetIndex: Int) -> [MemoTab]? {
+        guard let currentIndex = tabs.firstIndex(where: { $0.id == id }), currentIndex != targetIndex else {
+            return nil
+        }
+
+        var result = tabs
+        let tab = result.remove(at: currentIndex)
+        result.insert(tab, at: min(targetIndex, result.count))
+        return result
     }
 }

@@ -25,7 +25,6 @@ final class MemoEditorView: NSView, NSTextViewDelegate, NSTextFieldDelegate, Mem
     private var fontSize: CGFloat
     private var lineWrapEnabled: Bool
     private var isLoadingTab = false
-    private var isNormalizingTextAttributes = false
     private var isNormalizingTypingAttributes = false
     private var lastSearchPattern = ""
     private var lastSearchUsesRegularExpression = false
@@ -187,6 +186,9 @@ final class MemoEditorView: NSView, NSTextViewDelegate, NSTextFieldDelegate, Mem
         }
 
         isLoadingTab = true
+        // 탭을 바꾸면 이전 탭의 텍스트를 대상으로 한 undo 기록이 남아 있으면 안 된다.
+        // 그대로 두면 다른 문서에 그 기록이 적용되어 엉뚱한 범위가 지워진다.
+        textView.undoManager?.removeAllActions()
         let didLoadStoredText: Bool
         var didMigrateLegacyTitle = false
 
@@ -252,11 +254,17 @@ final class MemoEditorView: NSView, NSTextViewDelegate, NSTextFieldDelegate, Mem
     }
 
     func textDidChange(_ notification: Notification) {
-        guard !isLoadingTab, !isNormalizingTextAttributes else {
+        guard !isLoadingTab else {
             return
         }
 
-        normalizeTextAttributesInCurrentDocument()
+        normalizeCurrentTypingAttributes()
+
+        // ponytail: 보이는 영역 전체 다시그리기. 리플로우로 비워진 영역이 dirty rect에서 빠지는데,
+        // 스크롤이 없으면 다음 그리기 사이클이 오지 않아 잔상이 영구히 남는다.
+        // 큰 문서에서 입력이 느려지면 변경 문단 rect만 무효화하도록 좁힐 것.
+        textView.setNeedsDisplay(textView.visibleRect)
+
         lineNumberRuler?.rebuildLineStarts()
         lineNumberRuler?.needsDisplay = true
         scheduleAutosave()
@@ -520,6 +528,12 @@ final class MemoEditorView: NSView, NSTextViewDelegate, NSTextFieldDelegate, Mem
         requestCloseTab(id: id)
     }
 
+    func tabBarView(_ tabBarView: MemoTabBarView, didReorderTabs newOrder: [MemoTab]) {
+        tabs = newOrder
+        refreshTabBar()
+        saveSession()
+    }
+
     private var currentTab: MemoTab? {
         guard let selectedTabID else {
             return nil
@@ -722,6 +736,7 @@ final class MemoEditorView: NSView, NSTextViewDelegate, NSTextFieldDelegate, Mem
 
         textView.layoutManager?.invalidateLayout(forCharacterRange: fullRange, actualCharacterRange: nil)
         textView.layoutManager?.invalidateDisplay(forCharacterRange: fullRange)
+        textView.sizeToFit()
         textView.setNeedsDisplay(textView.visibleRect)
         scrollView.contentView.needsDisplay = true
 
@@ -960,39 +975,6 @@ final class MemoEditorView: NSView, NSTextViewDelegate, NSTextFieldDelegate, Mem
         let safeLocation = min(max(0, location), text.length - 1)
         let paragraphStyle = text.attribute(.paragraphStyle, at: safeLocation, effectiveRange: nil) as? NSParagraphStyle
         return paragraphStyle?.alignment ?? .left
-    }
-
-    private func normalizeTextAttributesInCurrentDocument() {
-        guard !isNormalizingTextAttributes, !textView.hasMarkedText(), let textStorage = textView.textStorage else {
-            normalizeCurrentTypingAttributes()
-            return
-        }
-
-        guard textStorage.length > 0 else {
-            textView.typingAttributes = defaultTypingAttributes(alignment: .left)
-            return
-        }
-
-        isNormalizingTextAttributes = true
-        let undoManager = textView.undoManager
-        let shouldRestoreUndo = undoManager?.isUndoRegistrationEnabled == true
-
-        if shouldRestoreUndo {
-            undoManager?.disableUndoRegistration()
-        }
-
-        textStorage.beginEditing()
-        let source = NSAttributedString(attributedString: textStorage)
-        applyDefaultAttributes(to: textStorage, preservingAlignmentFrom: source)
-
-        textStorage.endEditing()
-
-        if shouldRestoreUndo {
-            undoManager?.enableUndoRegistration()
-        }
-
-        isNormalizingTextAttributes = false
-        normalizeCurrentTypingAttributes()
     }
 
     private func normalizeCurrentTypingAttributes() {

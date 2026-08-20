@@ -145,6 +145,33 @@ enum MemoTextLogic {
         )
     }
 
+    static func isHorizontalRuleLine(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        return trimmed.count >= 3 && trimmed.allSatisfy { $0 == "_" }
+    }
+
+    static func horizontalRuleLineRanges(in string: NSString) -> [NSRange] {
+        guard string.length > 0 else {
+            return []
+        }
+
+        var ranges: [NSRange] = []
+        var location = 0
+
+        while location < string.length {
+            let lineRange = string.lineRange(for: NSRange(location: location, length: 0))
+            let range = contentRange(in: string, lineRange: lineRange)
+
+            if isHorizontalRuleLine(string.substring(with: range)) {
+                ranges.append(range)
+            }
+
+            location = NSMaxRange(lineRange)
+        }
+
+        return ranges
+    }
+
     static func searchExpression(
         pattern: String,
         usesRegularExpression: Bool
