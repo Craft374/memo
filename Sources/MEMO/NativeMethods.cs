@@ -9,9 +9,15 @@ internal static class NativeMethods
     public const int WM_IME_ENDCOMPOSITION = 0x010E;
     public const int WM_HSCROLL = 0x0114;
     public const int WM_VSCROLL = 0x0115;
+    public const int WM_MOUSEMOVE = 0x0200;
+    public const int WM_LBUTTONDOWN = 0x0201;
     public const int WM_MOUSEWHEEL = 0x020A;
     public const int WM_PASTE = 0x0302;
 
+    public const int MK_LBUTTON = 0x0001;
+    public const int MK_SHIFT = 0x0004;
+
+    public const int EM_SETSEL = 0x00B1;
     public const int EM_SETRECT = 0x00B3;
     public const int EM_GETCHARFORMAT = 0x0400 + 58;
     public const int EM_SETCHARFORMAT = 0x0400 + 68;

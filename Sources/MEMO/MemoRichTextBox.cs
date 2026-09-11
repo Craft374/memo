@@ -11,6 +11,8 @@ public sealed class MemoRichTextBox : RichTextBox
     private int wheelRemainder;
     private bool wrapToWindow = true;
     private bool viewChangePending;
+    private int? characterSelectionAnchor;
+    private int characterSelectionEnd;
 
     public bool IsImeComposing { get; private set; }
 
@@ -221,8 +223,8 @@ public sealed class MemoRichTextBox : RichTextBox
 
         if (keyData == Keys.Down && SelectionLength == 0 && !IsImeComposing && IsCaretOnLastPhysicalLine())
         {
+            // 마지막 실제 줄에는 다음 줄이 없으므로 커서만 문서 끝으로 옮긴다.
             Select(TextLength, 0);
-            ScrollToCaret();
             return true;
         }
 
@@ -233,6 +235,22 @@ public sealed class MemoRichTextBox : RichTextBox
     {
         switch (m.Msg)
         {
+            case NativeMethods.WM_LBUTTONDOWN
+                when ((long)m.WParam & NativeMethods.MK_SHIFT) != 0:
+                HandleShiftMouseSelection(ref m);
+                return;
+
+            case NativeMethods.WM_LBUTTONDOWN:
+                characterSelectionAnchor = null;
+                break;
+
+            case NativeMethods.WM_MOUSEMOVE
+                when characterSelectionAnchor is not null &&
+                     ((long)m.WParam & (NativeMethods.MK_LBUTTON | NativeMethods.MK_SHIFT)) ==
+                     (NativeMethods.MK_LBUTTON | NativeMethods.MK_SHIFT):
+                HandleShiftMouseSelection(ref m);
+                return;
+
             case NativeMethods.WM_PASTE:
                 PastePlainText();
                 return;
@@ -386,6 +404,84 @@ public sealed class MemoRichTextBox : RichTextBox
 
         SelectedText = $"\n{indentation}{number + 1}. ";
         return true;
+    }
+
+    private void HandleShiftMouseSelection(ref Message message)
+    {
+        int selectionEnd = GetCharacterIndexFromMousePosition(message.LParam);
+        int selectionAnchor = ResolveCharacterSelectionAnchor(selectionEnd);
+
+        base.WndProc(ref message);
+
+        characterSelectionAnchor = selectionAnchor;
+        characterSelectionEnd = selectionEnd;
+        NativeMethods.SendMessage(Handle, NativeMethods.EM_SETSEL,
+            (IntPtr)selectionAnchor, (IntPtr)selectionEnd);
+    }
+
+    private int ResolveCharacterSelectionAnchor(int target)
+    {
+        int selectionStart = SelectionStart;
+        int selectionEnd = selectionStart + SelectionLength;
+
+        if (characterSelectionAnchor is int anchor &&
+            Math.Min(anchor, characterSelectionEnd) == selectionStart &&
+            Math.Max(anchor, characterSelectionEnd) == selectionEnd)
+        {
+            return anchor;
+        }
+
+        if (SelectionLength == 0 || target >= selectionEnd)
+        {
+            return selectionStart;
+        }
+
+        if (target <= selectionStart)
+        {
+            return selectionEnd;
+        }
+
+        return target - selectionStart <= selectionEnd - target
+            ? selectionEnd
+            : selectionStart;
+    }
+
+    private int GetCharacterIndexFromMousePosition(IntPtr lParam)
+    {
+        long packedPosition = (long)lParam;
+        var point = new Point(
+            unchecked((short)(packedPosition & 0xFFFF)),
+            unchecked((short)((packedPosition >> 16) & 0xFFFF)));
+
+        int index = GetCharIndexFromPosition(point);
+        if (TextLength == 0 || index != TextLength - 1)
+        {
+            return index;
+        }
+
+        Point lastCharacterPosition = GetPositionFromCharIndex(index);
+        Point documentEndPosition = GetPositionFromCharIndex(TextLength);
+        if (lastCharacterPosition.Y != documentEndPosition.Y &&
+            point.Y >= documentEndPosition.Y)
+        {
+            return TextLength;
+        }
+
+        if (lastCharacterPosition.Y == documentEndPosition.Y)
+        {
+            int midpoint = lastCharacterPosition.X +
+                (documentEndPosition.X - lastCharacterPosition.X) / 2;
+            bool isPastMidpoint = documentEndPosition.X >= lastCharacterPosition.X
+                ? point.X >= midpoint
+                : point.X <= midpoint;
+            if (isPastMidpoint)
+            {
+                return TextLength;
+            }
+        }
+
+        float lineHeight = GetLineHeightPixels(Font, DeviceDpi, ZoomFactor);
+        return point.Y >= documentEndPosition.Y + lineHeight ? TextLength : index;
     }
 
     private bool IsCaretOnLastPhysicalLine() =>
