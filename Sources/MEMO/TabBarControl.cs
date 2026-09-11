@@ -5,16 +5,20 @@ public sealed class TabBarControl : Control
     public event Action<string>? TabSelected;
     public event Action<string>? TabCloseRequested;
     public event Action? NewTabRequested;
+    public event Action<IReadOnlyList<MemoTab>>? TabsReordered;
 
     private sealed record TabLayout(string Id, Rectangle Bounds, Rectangle CloseBounds);
 
     private readonly List<TabLayout> layouts = new();
-    private IReadOnlyList<MemoTab> tabs = Array.Empty<MemoTab>();
+    private List<MemoTab> tabs = new();
     private string? selectedId;
     private string? hoverTabId;
     private bool hoverClose;
     private bool hoverPlus;
     private Rectangle plusBounds;
+    private string? draggingTabId;
+    private int dragStartX;
+    private bool dragMoved;
 
     public TabBarControl()
     {
@@ -35,7 +39,7 @@ public sealed class TabBarControl : Control
 
     public void UpdateTabs(IReadOnlyList<MemoTab> tabs, string? selectedId)
     {
-        this.tabs = tabs;
+        this.tabs = tabs.ToList();
         this.selectedId = selectedId;
         Invalidate();
     }
@@ -139,6 +143,11 @@ public sealed class TabBarControl : Control
     {
         base.OnMouseMove(e);
 
+        if (draggingTabId != null && e.Button == MouseButtons.Left)
+        {
+            DragTab(e.X);
+        }
+
         string? newHover = null;
         bool newHoverClose = false;
         foreach (var layout in layouts)
@@ -203,11 +212,81 @@ public sealed class TabBarControl : Control
                 }
                 else
                 {
+                    draggingTabId = layout.Id;
+                    dragStartX = e.X;
+                    dragMoved = false;
                     TabSelected?.Invoke(layout.Id);
                 }
             }
 
             return;
+        }
+    }
+
+    protected override void OnMouseUp(MouseEventArgs e)
+    {
+        base.OnMouseUp(e);
+        EndDrag();
+    }
+
+    protected override void OnMouseCaptureChanged(EventArgs e)
+    {
+        base.OnMouseCaptureChanged(e);
+        EndDrag();
+    }
+
+    private void DragTab(int x)
+    {
+        if (!dragMoved && Math.Abs(x - dragStartX) <= 4 * DeviceDpi / 96f)
+        {
+            return;
+        }
+
+        dragMoved = true;
+        int from = tabs.FindIndex(t => t.Id == draggingTabId);
+        int to = DropIndex(x);
+        if (from < 0 || from == to)
+        {
+            return;
+        }
+
+        var tab = tabs[from];
+        tabs.RemoveAt(from);
+        tabs.Insert(to, tab);
+        Invalidate();
+    }
+
+    // 끌고 있는 탭을 뺀 나머지 중 가운데가 커서보다 왼쪽인 탭 수 = 놓일 자리.
+    // 폭이 다른 탭끼리 자리가 왔다 갔다 하지 않도록 경계 대신 가운데를 기준으로 한다.
+    private int DropIndex(int x)
+    {
+        int left = 0;
+        int index = 0;
+        foreach (var tab in tabs)
+        {
+            int width = layouts.Find(l => l.Id == tab.Id)?.Bounds.Width ?? 0;
+            if (tab.Id != draggingTabId && left + width / 2 < x)
+            {
+                index++;
+            }
+
+            left += width;
+        }
+
+        return index;
+    }
+
+    private void EndDrag()
+    {
+        if (draggingTabId == null)
+        {
+            return;
+        }
+
+        draggingTabId = null;
+        if (dragMoved)
+        {
+            TabsReordered?.Invoke(tabs.ToList());
         }
     }
 

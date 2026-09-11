@@ -20,6 +20,7 @@ internal static class Theme
     public static readonly Color GutterBackground = Color.FromArgb(14, 15, 17);
     public static readonly Color GutterSeparator = Color.FromArgb(56, 56, 56);
     public static readonly Color LineNumber = Color.FromArgb(133, 133, 133);
+    public static readonly Color HorizontalRule = Color.FromArgb(82, 82, 82);
 
     public static readonly Color MenuBackground = Color.FromArgb(14, 15, 16);
     public static readonly Color MenuDropDownBackground = Color.FromArgb(24, 25, 28);

@@ -13,6 +13,7 @@ public sealed class MemoRichTextBox : RichTextBox
     private bool viewChangePending;
     private int? characterSelectionAnchor;
     private int characterSelectionEnd;
+    private List<(int Start, int Length)> ruleRanges = new();
 
     public bool IsImeComposing { get; private set; }
 
@@ -207,21 +208,90 @@ public sealed class MemoRichTextBox : RichTextBox
         SelectedText = TextSanitizer.Sanitize(text);
     }
 
+    // 다른 앱에는 서식 없는 텍스트만 넘긴다 (맥 버전과 동일)
+    public bool CopyPlainText()
+    {
+        string text = SelectedText;
+        if (text.Length == 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            Clipboard.SetText(text.ReplaceLineEndings("\r\n"));
+            return true;
+        }
+        catch (System.Runtime.InteropServices.ExternalException)
+        {
+            return false;
+        }
+    }
+
+    public void CutPlainText()
+    {
+        // 클립보드에 못 넣었으면 지우지 않는다
+        if (CopyPlainText())
+        {
+            SelectedText = "";
+        }
+    }
+
+    internal void ApplyEdit(TextEdit? edit)
+    {
+        if (edit == null)
+        {
+            return;
+        }
+
+        Select(edit.Start, edit.Length);
+        SelectedText = edit.Replacement;
+        if (edit.SelectionStart is int start)
+        {
+            Select(start, edit.SelectionLength);
+        }
+    }
+
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
-        if (keyData == Keys.Tab && !IsImeComposing)
+        if (IsImeComposing)
         {
-            SelectedText = "\t";
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
+
+        // RichEdit는 Ctrl+C/X/V를 WM_COPY 등을 거치지 않고 직접 처리하므로 여기서 가로챈다.
+        if (keyData is (Keys.Control | Keys.C) or (Keys.Control | Keys.Insert))
+        {
+            CopyPlainText();
             return true;
         }
 
-        if (keyData == Keys.Enter && SelectionLength == 0 && !IsImeComposing &&
-            TryHandleNumberedListEnter())
+        if (keyData is (Keys.Control | Keys.X) or (Keys.Shift | Keys.Delete) && SelectionLength > 0)
         {
+            CutPlainText();
             return true;
         }
 
-        if (keyData == Keys.Down && SelectionLength == 0 && !IsImeComposing && IsCaretOnLastPhysicalLine())
+        if (keyData is (Keys.Control | Keys.V) or (Keys.Shift | Keys.Insert))
+        {
+            PastePlainText();
+            return true;
+        }
+
+        if (keyData is Keys.Tab or (Keys.Shift | Keys.Tab))
+        {
+            ApplyEdit(MemoTextLogic.IndentationEdit(Text, SelectionStart, SelectionLength, outdent: keyData != Keys.Tab));
+            return true;
+        }
+
+        if (keyData == Keys.Enter && SelectionLength == 0 &&
+            MemoTextLogic.ListEdit(Text, SelectionStart) is { } edit)
+        {
+            ApplyEdit(edit);
+            return true;
+        }
+
+        if (keyData == Keys.Down && SelectionLength == 0 && IsCaretOnLastPhysicalLine())
         {
             // 마지막 실제 줄에는 다음 줄이 없으므로 커서만 문서 끝으로 옮긴다.
             Select(TextLength, 0);
@@ -255,6 +325,19 @@ public sealed class MemoRichTextBox : RichTextBox
                 PastePlainText();
                 return;
 
+            case NativeMethods.WM_COPY:
+                CopyPlainText();
+                return;
+
+            case NativeMethods.WM_CUT:
+                CutPlainText();
+                return;
+
+            case NativeMethods.WM_PAINT:
+                base.WndProc(ref m);
+                DrawHorizontalRules();
+                return;
+
             case NativeMethods.WM_IME_STARTCOMPOSITION:
                 IsImeComposing = true;
                 break;
@@ -280,6 +363,78 @@ public sealed class MemoRichTextBox : RichTextBox
             case NativeMethods.WM_IME_ENDCOMPOSITION:
                 CompleteImeComposition();
                 break;
+        }
+    }
+
+    protected override void OnTextChanged(EventArgs e)
+    {
+        var ranges = MemoTextLogic.HorizontalRuleLineRanges(Text);
+        // 줄이 구분선이 되거나 풀릴 때 RichEdit는 바뀐 글자 쪽만 다시 그릴 수 있어 전체를 다시 그린다
+        if (ranges.Count != ruleRanges.Count)
+        {
+            Invalidate();
+        }
+
+        ruleRanges = ranges;
+        base.OnTextChanged(e);
+    }
+
+    // ___ 처럼 밑줄 3개 이상으로만 된 줄은 RichEdit가 그린 밑줄을 배경색으로 덮고 가운데에 가로선을 긋는다.
+    // 텍스트는 그대로라 저장/복사는 영향 없음. 선택 영역이 걸친 줄은 실제 글자를 보여준다.
+    private void DrawHorizontalRules()
+    {
+        if (ruleRanges.Count == 0)
+        {
+            return;
+        }
+
+        var formatRect = new NativeMethods.RECT();
+        NativeMethods.SendMessage(Handle, NativeMethods.EM_GETRECT, IntPtr.Zero, ref formatRect);
+        int lineHeight = (int)Math.Round(GetLineHeightPixels(Font, DeviceDpi, ZoomFactor));
+        int selectionStart = SelectionStart;
+        int selectionEnd = selectionStart + SelectionLength;
+        var client = ClientRectangle;
+
+        // 깜빡이는 캐럿(XOR) 위에 덧그리면 잔상이 남으므로 잠시 숨긴다
+        NativeMethods.HideCaret(Handle);
+        try
+        {
+            using var g = Graphics.FromHwnd(Handle);
+            using var background = new SolidBrush(BackColor);
+            using var pen = new Pen(Theme.HorizontalRule, Math.Max(1, DeviceDpi / 96));
+            foreach (var (start, length) in ruleRanges)
+            {
+                if (selectionEnd > selectionStart && selectionStart < start + length && selectionEnd > start)
+                {
+                    continue;
+                }
+
+                int top = GetPositionFromCharIndex(start).Y;
+                int bottom = GetPositionFromCharIndex(start + length - 1).Y + lineHeight;
+                // 위치 값이 엉뚱하면 본문 전체를 배경색으로 덮을 수 있으므로 건너뛴다
+                if (bottom <= top || bottom - top > client.Height)
+                {
+                    continue;
+                }
+
+                var fill = Rectangle.Intersect(client, new Rectangle(0, top, client.Width, bottom - top));
+                if (fill.IsEmpty)
+                {
+                    continue;
+                }
+
+                g.FillRectangle(background, fill);
+                int y = top + lineHeight / 2;
+                g.DrawLine(pen, formatRect.Left, y, formatRect.Right, y);
+            }
+        }
+        catch (System.Runtime.InteropServices.ExternalException)
+        {
+            // 장식용 덧그리기라 GDI+ 실패는 무시하고 본문 표시는 유지
+        }
+        finally
+        {
+            NativeMethods.ShowCaret(Handle);
         }
     }
 
@@ -344,66 +499,6 @@ public sealed class MemoRichTextBox : RichTextBox
 
         IsImeComposing = false;
         ImeCompositionEnded?.Invoke();
-    }
-
-    private bool TryHandleNumberedListEnter()
-    {
-        int caret = SelectionStart;
-        int lineStart = caret == 0 ? 0 : Text.LastIndexOf('\n', caret - 1) + 1;
-        int lineEnd = Text.IndexOf('\n', caret);
-        if (lineEnd < 0)
-        {
-            lineEnd = TextLength;
-        }
-
-        if (caret != lineEnd)
-        {
-            return false;
-        }
-
-        string line = Text[lineStart..caret];
-        int index = 0;
-        while (index < line.Length && (line[index] == ' ' || line[index] == '\t'))
-        {
-            index++;
-        }
-
-        string indentation = line[..index];
-        int numberStart = index;
-        while (index < line.Length && char.IsAsciiDigit(line[index]))
-        {
-            index++;
-        }
-
-        if (index == numberStart || index >= line.Length || line[index] != '.')
-        {
-            return false;
-        }
-
-        string numberText = line[numberStart..index];
-        index++;
-        int spacingStart = index;
-        while (index < line.Length && (line[index] == ' ' || line[index] == '\t'))
-        {
-            index++;
-        }
-
-        if (index == spacingStart ||
-            !long.TryParse(numberText, out long number) ||
-            number == long.MaxValue)
-        {
-            return false;
-        }
-
-        if (index == line.Length)
-        {
-            Select(lineStart, caret - lineStart);
-            SelectedText = "";
-            return true;
-        }
-
-        SelectedText = $"\n{indentation}{number + 1}. ";
-        return true;
     }
 
     private void HandleShiftMouseSelection(ref Message message)

@@ -131,15 +131,7 @@ internal sealed class FontSettingsDialog : Form
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
-
-        int enabled = 1;
-        if (NativeMethods.DwmSetWindowAttribute(Handle, NativeMethods.DWMWA_USE_IMMERSIVE_DARK_MODE, ref enabled, sizeof(int)) != 0)
-        {
-            NativeMethods.DwmSetWindowAttribute(Handle, NativeMethods.DWMWA_USE_IMMERSIVE_DARK_MODE_OLD, ref enabled, sizeof(int));
-        }
-
-        int caption = (Theme.WindowBackground.B << 16) | (Theme.WindowBackground.G << 8) | Theme.WindowBackground.R;
-        NativeMethods.DwmSetWindowAttribute(Handle, NativeMethods.DWMWA_CAPTION_COLOR, ref caption, sizeof(int));
+        NativeMethods.UseDarkTitleBar(Handle);
     }
 
     private void UpdatePreview()
@@ -158,7 +150,7 @@ internal sealed class FontSettingsDialog : Form
         }
     }
 
-    private static Button NewButton(string text, DialogResult result) => new()
+    internal static Button NewButton(string text, DialogResult result) => new()
     {
         Text = text,
         DialogResult = result,

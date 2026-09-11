@@ -19,6 +19,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Resources\AppIcon.ico" LogicalName="MEMO.AppIcon.ico" />
+    <Compile Remove="Tests\**" />
   </ItemGroup>
 
 </Project>

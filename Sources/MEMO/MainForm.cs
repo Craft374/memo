@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Reflection;
+using System.Text;
+using System.Text.RegularExpressions;
 
 namespace Memo;
 
@@ -28,6 +30,9 @@ public sealed class MainForm : Form
     private bool autosaveAfterIme;
     private int tabBarAnimFrom;
     private int tabBarAnimTo;
+    private string lastSearchPattern = "";
+    private bool lastSearchUsesRegex;
+    private (int Start, int Length)? lastFoundRange;
 
     private ToolStripMenuItem wrapMenuItem = null!;
     private ToolStripMenuItem undoMenuItem = null!;
@@ -79,16 +84,7 @@ public sealed class MainForm : Form
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
-
-        int enabled = 1;
-        if (NativeMethods.DwmSetWindowAttribute(Handle, NativeMethods.DWMWA_USE_IMMERSIVE_DARK_MODE, ref enabled, sizeof(int)) != 0)
-        {
-            NativeMethods.DwmSetWindowAttribute(Handle, NativeMethods.DWMWA_USE_IMMERSIVE_DARK_MODE_OLD, ref enabled, sizeof(int));
-        }
-
-        // 타이틀바를 본문과 같은 색으로 (Windows 11)
-        int caption = (Theme.WindowBackground.B << 16) | (Theme.WindowBackground.G << 8) | Theme.WindowBackground.R;
-        NativeMethods.DwmSetWindowAttribute(Handle, NativeMethods.DWMWA_CAPTION_COLOR, ref caption, sizeof(int));
+        NativeMethods.UseDarkTitleBar(Handle);
     }
 
     protected override void OnShown(EventArgs e)
@@ -161,6 +157,10 @@ public sealed class MainForm : Form
                 CreateNewTab();
                 return true;
 
+            case Keys.Control | Keys.G:
+                FindNext();
+                return true;
+
             case Keys.Control | Keys.Add:
                 ChangeFontSize(KeyboardFontSizeStep);
                 return true;
@@ -222,6 +222,14 @@ public sealed class MainForm : Form
         titleEditor.ForeColor = Theme.EditorText;
         titleEditor.Font = new Font("Segoe UI", 18f, FontStyle.Bold, GraphicsUnit.Point);
         titleEditor.TextChanged += (_, _) => OnTitleTextChanged();
+        titleEditor.KeyDown += (_, e) =>
+        {
+            if (e.KeyCode == Keys.Enter)
+            {
+                e.SuppressKeyPress = true;
+                editor.Focus();
+            }
+        };
     }
 
     private void BuildLayout()
@@ -256,6 +264,7 @@ public sealed class MainForm : Form
         tabBar.TabSelected += SelectTab;
         tabBar.TabCloseRequested += CloseTab;
         tabBar.NewTabRequested += CreateNewTab;
+        tabBar.TabsReordered += ReorderTabs;
 
         Controls.Add(content);
         Controls.Add(tabBar);
@@ -296,6 +305,10 @@ public sealed class MainForm : Form
         editMenu.DropDownItems.Add(copyMenuItem);
         editMenu.DropDownItems.Add(pasteMenuItem);
         editMenu.DropDownItems.Add(selectAllItem);
+        editMenu.DropDownItems.Add(new ToolStripSeparator());
+        editMenu.DropDownItems.Add(NewItem("검색...", Keys.Control | Keys.F, (_, _) => ShowSearch(replace: false)));
+        editMenu.DropDownItems.Add(NewItem("다음 찾기", Keys.F3, (_, _) => FindNext()));
+        editMenu.DropDownItems.Add(NewItem("바꾸기...", Keys.Control | Keys.H, (_, _) => ShowSearch(replace: true)));
         editMenu.DropDownItems.Add(new ToolStripSeparator());
         editMenu.DropDownItems.Add(NewItem("왼쪽 정렬", Keys.Control | Keys.L, (_, _) => SetAlignment(HorizontalAlignment.Left)));
         editMenu.DropDownItems.Add(NewItem("가운데 정렬", Keys.Control | Keys.E, (_, _) => SetAlignment(HorizontalAlignment.Center)));
@@ -645,6 +658,156 @@ public sealed class MainForm : Form
 
         int next = (current + offset + tabs.Count) % tabs.Count;
         SelectTab(tabs[next].Id);
+    }
+
+    private void ReorderTabs(IReadOnlyList<MemoTab> order)
+    {
+        tabs.Clear();
+        tabs.AddRange(order);
+        RefreshTabBar();
+        SaveSessionSafe();
+    }
+
+    private void ShowSearch(bool replace)
+    {
+        using var dialog = new FindDialog(replace, lastSearchPattern, lastSearchUsesRegex);
+        var result = dialog.ShowDialog(this);
+        editor.Focus();
+        if (result is not (DialogResult.OK or DialogResult.Yes))
+        {
+            return;
+        }
+
+        lastSearchPattern = dialog.Pattern;
+        lastSearchUsesRegex = dialog.UseRegex;
+        lastFoundRange = null;
+
+        if (lastSearchPattern.Length == 0)
+        {
+            ShowMessage(replace ? "바꾸기" : "검색", "찾을 내용을 입력해주세요.");
+        }
+        else if (!replace)
+        {
+            FindNext();
+        }
+        else
+        {
+            // CRLF는 RichEdit에서 한 글자라 선택 위치 계산이 어긋나지 않게 맞춘다
+            string replacement = dialog.Replacement.ReplaceLineEndings("\n");
+            RunSearch(regex =>
+            {
+                if (result == DialogResult.OK)
+                {
+                    ReplaceOne(regex, replacement);
+                }
+                else
+                {
+                    ReplaceAll(regex, replacement);
+                }
+            });
+        }
+    }
+
+    private void FindNext()
+    {
+        if (lastSearchPattern.Length == 0)
+        {
+            ShowSearch(replace: false);
+            return;
+        }
+
+        RunSearch(regex =>
+        {
+            int start = editor.SelectionStart + editor.SelectionLength;
+            // 빈 문자열에 맞는 정규식이 같은 자리에서 멈추지 않도록 한 칸 넘긴다
+            if (editor.SelectionLength == 0 && lastFoundRange == (editor.SelectionStart, 0))
+            {
+                start++;
+            }
+
+            var match = MemoTextLogic.NextMatch(regex, editor.Text, start);
+            if (match == null)
+            {
+                ShowMessage("검색 결과 없음", "찾는 내용이 없습니다.");
+                return;
+            }
+
+            lastFoundRange = (match.Index, match.Length);
+            editor.Select(match.Index, match.Length);
+            editor.ScrollToCaret();
+            editor.Focus();
+        });
+    }
+
+    private void ReplaceOne(Regex regex, string replacement)
+    {
+        string text = editor.Text;
+        int start = editor.SelectionStart;
+        int length = editor.SelectionLength;
+        var selected = regex.Match(text, start, length);
+        var match = selected.Success && selected.Index == start && selected.Length == length
+            ? selected
+            : MemoTextLogic.NextMatch(regex, text, start + length);
+        if (match == null)
+        {
+            ShowMessage("바꾸기", "찾는 내용이 없습니다.");
+            return;
+        }
+
+        string resolved = match.Result(ReplacementTemplate(replacement));
+        editor.ApplyEdit(new TextEdit(match.Index, match.Length, resolved, match.Index, resolved.Length));
+        lastFoundRange = null;
+        FindNext();
+    }
+
+    private void ReplaceAll(Regex regex, string replacement)
+    {
+        string text = editor.Text;
+        var matches = regex.Matches(text);
+        if (matches.Count == 0)
+        {
+            ShowMessage("바꾸기", "찾는 내용이 없습니다.");
+            return;
+        }
+
+        // ponytail: 첫 매치~마지막 매치 구간을 한 번에 바꿔 실행 취소 한 번으로 되돌린다.
+        // 대신 그 구간 안 문단들의 정렬이 하나로 합쳐질 수 있음. 문제 되면 TOM(ITextDocument2) 편집 묶음 + 매치별 교체로.
+        string template = ReplacementTemplate(replacement);
+        int start = matches[0].Index;
+        int end = start;
+        var builder = new StringBuilder();
+        foreach (Match match in matches)
+        {
+            builder.Append(text, end, match.Index - end).Append(match.Result(template));
+            end = match.Index + match.Length;
+        }
+
+        editor.ApplyEdit(new TextEdit(start, end - start, builder.ToString()));
+        lastFoundRange = null;
+        editor.Focus();
+        ShowMessage("바꾸기 완료", $"{matches.Count}개를 바꿨습니다.");
+    }
+
+    private void RunSearch(Action<Regex> action)
+    {
+        try
+        {
+            action(MemoTextLogic.SearchRegex(lastSearchPattern, lastSearchUsesRegex));
+        }
+        catch (Exception error) when (error is RegexParseException or RegexMatchTimeoutException)
+        {
+            ShowMessage("정규식 오류", error.Message);
+        }
+    }
+
+    // 일반 검색에서는 바꿀 내용의 $를 그룹 참조가 아닌 글자로 취급
+    private string ReplacementTemplate(string replacement) =>
+        lastSearchUsesRegex ? replacement : replacement.Replace("$", "$$");
+
+    private void ShowMessage(string title, string detail)
+    {
+        MessageBox.Show(this, detail, title, MessageBoxButtons.OK, MessageBoxIcon.Information);
+        editor.Focus();
     }
 
     private bool ConfirmTabClose(MemoTab tab)

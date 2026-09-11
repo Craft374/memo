@@ -5,6 +5,7 @@ namespace Memo;
 internal static class NativeMethods
 {
     public const int WM_SIZE = 0x0005;
+    public const int WM_PAINT = 0x000F;
     public const int WM_IME_STARTCOMPOSITION = 0x010D;
     public const int WM_IME_ENDCOMPOSITION = 0x010E;
     public const int WM_HSCROLL = 0x0114;
@@ -12,12 +13,15 @@ internal static class NativeMethods
     public const int WM_MOUSEMOVE = 0x0200;
     public const int WM_LBUTTONDOWN = 0x0201;
     public const int WM_MOUSEWHEEL = 0x020A;
+    public const int WM_CUT = 0x0300;
+    public const int WM_COPY = 0x0301;
     public const int WM_PASTE = 0x0302;
 
     public const int MK_LBUTTON = 0x0001;
     public const int MK_SHIFT = 0x0004;
 
     public const int EM_SETSEL = 0x00B1;
+    public const int EM_GETRECT = 0x00B2;
     public const int EM_SETRECT = 0x00B3;
     public const int EM_GETCHARFORMAT = 0x0400 + 58;
     public const int EM_SETCHARFORMAT = 0x0400 + 68;
@@ -152,9 +156,28 @@ internal static class NativeMethods
     [DllImport("user32.dll")]
     public static extern bool SetForegroundWindow(IntPtr hWnd);
 
+    [DllImport("user32.dll")]
+    public static extern bool HideCaret(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern bool ShowCaret(IntPtr hWnd);
+
     [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)]
     public static extern int SetWindowTheme(IntPtr hWnd, string? appName, string? idList);
 
     [DllImport("dwmapi.dll")]
     public static extern int DwmSetWindowAttribute(IntPtr hWnd, int attribute, ref int value, int size);
+
+    // 다크 타이틀바 + 타이틀바를 본문과 같은 색으로 (Windows 11)
+    public static void UseDarkTitleBar(IntPtr hWnd)
+    {
+        int enabled = 1;
+        if (DwmSetWindowAttribute(hWnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ref enabled, sizeof(int)) != 0)
+        {
+            DwmSetWindowAttribute(hWnd, DWMWA_USE_IMMERSIVE_DARK_MODE_OLD, ref enabled, sizeof(int));
+        }
+
+        int caption = (Theme.WindowBackground.B << 16) | (Theme.WindowBackground.G << 8) | Theme.WindowBackground.R;
+        DwmSetWindowAttribute(hWnd, DWMWA_CAPTION_COLOR, ref caption, sizeof(int));
+    }
 }
